@@ -1,0 +1,8 @@
+{
+  "name": "Web & VNC Portal v2",
+  "description": "A powerful Android portal to access web services, VNC shortcuts, and custom IP addresses, complete with access history, full screen mode, and quality settings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
