@@ -140,6 +140,18 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * Rename a local file
+     */
+    fun renameLocalFile(file: File, newName: String) {
+        viewModelScope.launch {
+            val renamed = manager.renameLocalFile(file, newName)
+            if (renamed != null) {
+                refreshFilesList()
+            }
+        }
+    }
+
+    /**
      * Delete a transfer task from database and cleanup its temporary files
      */
     fun deleteTransfer(taskId: Long) {

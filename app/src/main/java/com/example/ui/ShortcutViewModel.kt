@@ -109,6 +109,20 @@ class ShortcutViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun recordShortcutHistory(shortcut: ShortcutEntity) {
+        viewModelScope.launch {
+            repository.insertHistory(
+                HistoryEntity(
+                    shortcutId = if (shortcut.id > 0) shortcut.id else null,
+                    name = shortcut.name,
+                    url = shortcut.url,
+                    isVnc = shortcut.isVnc,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
     fun switchSession(index: Int) {
         if (index in _activeSessions.value.indices) {
             _focusedSessionIndex.value = index
@@ -212,7 +226,8 @@ class ShortcutViewModel(application: Application) : AndroidViewModel(application
         vncQuality: String = "Medium",
         vncColorDepth: String = "24-bit",
         vncScale: String = "Fit to screen",
-        isFullscreen: Boolean = false
+        isFullscreen: Boolean = false,
+        openInChrome: Boolean = false
     ) {
         viewModelScope.launch {
             val cleanedUrl = if (!url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("vnc://")) {
@@ -230,7 +245,8 @@ class ShortcutViewModel(application: Application) : AndroidViewModel(application
                     vncQuality = vncQuality,
                     vncColorDepth = vncColorDepth,
                     vncScale = vncScale,
-                    isFullscreen = isFullscreen
+                    isFullscreen = isFullscreen,
+                    openInChrome = openInChrome
                 )
             )
         }
@@ -246,7 +262,8 @@ class ShortcutViewModel(application: Application) : AndroidViewModel(application
         vncQuality: String = "Medium",
         vncColorDepth: String = "24-bit",
         vncScale: String = "Fit to screen",
-        isFullscreen: Boolean = false
+        isFullscreen: Boolean = false,
+        openInChrome: Boolean = false
     ) {
         viewModelScope.launch {
             val cleanedUrl = if (!url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("vnc://")) {
@@ -265,7 +282,8 @@ class ShortcutViewModel(application: Application) : AndroidViewModel(application
                     vncQuality = vncQuality,
                     vncColorDepth = vncColorDepth,
                     vncScale = vncScale,
-                    isFullscreen = isFullscreen
+                    isFullscreen = isFullscreen,
+                    openInChrome = openInChrome
                 )
             )
         }

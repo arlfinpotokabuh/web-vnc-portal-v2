@@ -344,6 +344,27 @@ fun StorageFilesTab(viewModel: TransferViewModel) {
     
     var showUploadDialogForFile by remember { mutableStateOf<File?>(null) }
     var fileToPreview by remember { mutableStateOf<File?>(null) }
+    var fileToRename by remember { mutableStateOf<File?>(null) }
+
+    fun openFileExternally(file: File) {
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            val extension = file.extension.lowercase()
+            val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
+            
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(android.content.Intent.createChooser(intent, "Buka dengan..."))
+        } catch (e: Exception) {
+            Toast.makeText(context, "Tidak dapat membuka file: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Storage capacity calculation
     val dir = viewModel.getStorageDir()
@@ -444,12 +465,14 @@ fun StorageFilesTab(viewModel: TransferViewModel) {
                     StorageFileRow(
                         file = file,
                         onOpen = { fileToPreview = file },
+                        onOpenExternal = { openFileExternally(file) },
+                        onRename = { fileToRename = file },
                         onUpload = { showUploadDialogForFile = file },
                         onDelete = { viewModel.deleteLocalFile(file) },
                         onExport = {
                             viewModel.exportFileToPublic(file) { success ->
                                 if (success) {
-                                    Toast.makeText(context, "Berhasil diekspor ke folder Downloads!", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Berhasil disimpan ke folder Downloads/Movies/Pictures!", Toast.LENGTH_LONG).show()
                                 } else {
                                     Toast.makeText(context, "Gagal mengekspor file.", Toast.LENGTH_SHORT).show()
                                 }
@@ -458,6 +481,17 @@ fun StorageFilesTab(viewModel: TransferViewModel) {
                     )
                 }
             }
+        }
+
+        if (fileToRename != null) {
+            RenameFileDialog(
+                file = fileToRename!!,
+                onDismiss = { fileToRename = null },
+                onRename = { newName ->
+                    viewModel.renameLocalFile(fileToRename!!, newName)
+                    fileToRename = null
+                }
+            )
         }
 
         if (showUploadDialogForFile != null) {
@@ -485,6 +519,8 @@ fun StorageFilesTab(viewModel: TransferViewModel) {
 fun StorageFileRow(
     file: File,
     onOpen: () -> Unit,
+    onOpenExternal: () -> Unit,
+    onRename: () -> Unit,
     onUpload: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit
@@ -496,6 +532,7 @@ fun StorageFileRow(
 
     val ext = file.name.substringAfterLast(".", "").lowercase()
     val isTxt = ext in listOf("txt", "json", "xml", "html", "css", "js", "log", "md")
+    val isMedia = ext in listOf("mp4", "mkv", "avi", "mov", "mp3", "wav", "flac", "jpg", "jpeg", "png", "gif", "webp")
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF151518)),
@@ -512,17 +549,22 @@ fun StorageFileRow(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .background(Color(0xFF1E1E22), RoundedCornerShape(8.dp)),
+                    .background(Color(0xFF1E1E22), RoundedCornerShape(8.dp))
+                    .clickable { if (isTxt) onOpen() else onOpenExternal() },
                 contentAlignment = Alignment.Center
             ) {
-                val icon = if (isTxt) Icons.Default.Menu else Icons.Default.Star
+                val icon = when {
+                    isTxt -> Icons.Default.Menu
+                    isMedia -> Icons.Default.PlayArrow
+                    else -> Icons.Default.Star
+                }
                 Icon(icon, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(20.dp))
             }
 
             Spacer(modifier = Modifier.width(10.dp))
 
             // File Details
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f).clickable { if (isTxt) onOpen() else onOpenExternal() }) {
                 Text(
                     text = file.name,
                     fontWeight = FontWeight.SemiBold,
@@ -543,11 +585,9 @@ fun StorageFileRow(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Open button (if previewable)
-                if (isTxt) {
-                    IconButton(onClick = onOpen, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Search, contentDescription = "Pratinjau", tint = Color.LightGray, modifier = Modifier.size(16.dp))
-                    }
+                // Rename button
+                IconButton(onClick = onRename, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = "Ubah Nama", tint = Color.LightGray, modifier = Modifier.size(16.dp))
                 }
 
                 // Upload button
@@ -557,7 +597,7 @@ fun StorageFileRow(
 
                 // Export button
                 IconButton(onClick = onExport, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.DownloadForOffline, contentDescription = "Ekspor ke Galeri", tint = Color(0xFFFF9800), modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.DownloadForOffline, contentDescription = "Simpan ke Galeri", tint = Color(0xFFFF9800), modifier = Modifier.size(16.dp))
                 }
 
                 // Delete button
@@ -570,6 +610,67 @@ fun StorageFileRow(
 }
 
 // ---------------- DIALOGS ----------------
+
+@Composable
+fun RenameFileDialog(
+    file: java.io.File,
+    onDismiss: () -> Unit,
+    onRename: (String) -> Unit
+) {
+    var newName by remember { mutableStateOf(file.name) }
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E22)),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Color(0xFF2C2C35))
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Ubah Nama File",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("Nama Baru") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = Color(0xFF00BCD4),
+                        unfocusedBorderColor = Color.Gray
+                    ),
+                    singleLine = true
+                )
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Batal", color = Color.Gray)
+                    }
+                    Button(
+                        onClick = { if (newName.isNotBlank()) onRename(newName) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BCD4)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Simpan", color = Color.Black)
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun AddDownloadDialog(

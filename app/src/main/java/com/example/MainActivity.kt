@@ -3,6 +3,9 @@ package com.example
 import android.app.Application
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import android.content.Intent
+import android.net.Uri
+import androidx.browser.customtabs.CustomTabsIntent
 import android.os.Bundle
 import android.webkit.*
 import android.view.View
@@ -317,6 +320,7 @@ fun DashboardScreen(
 ) {
     val shortcuts by viewModel.shortcuts.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     var showAddDialog by remember { mutableStateOf(false) }
     var editingShortcut by remember { mutableStateOf<ShortcutEntity?>(null) }
@@ -617,7 +621,19 @@ fun DashboardScreen(
                             items(filteredShortcuts) { shortcut ->
                                 ShortcutCard(
                                     shortcut = shortcut,
-                                    onConnect = { viewModel.selectShortcut(shortcut) },
+                                    onConnect = {
+                                        if (shortcut.openInChrome && !shortcut.isVnc) {
+                                            try {
+                                                val customTabsIntent = CustomTabsIntent.Builder().build()
+                                                customTabsIntent.launchUrl(context, Uri.parse(shortcut.url))
+                                                viewModel.recordShortcutHistory(shortcut)
+                                            } catch (e: Exception) {
+                                                android.widget.Toast.makeText(context, "Gagal membuka Chrome Tab: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        } else {
+                                            viewModel.selectShortcut(shortcut)
+                                        }
+                                    },
                                     onEdit = { editingShortcut = shortcut },
                                     onDelete = { viewModel.deleteShortcut(shortcut) }
                                 )
@@ -679,8 +695,8 @@ fun DashboardScreen(
         if (showAddDialog) {
             AddEditShortcutDialog(
                 onDismiss = { showAddDialog = false },
-                onSave = { name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs ->
-                    viewModel.addShortcut(name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs)
+                onSave = { name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs, oic ->
+                    viewModel.addShortcut(name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs, oic)
                     showAddDialog = false
                 }
             )
@@ -691,9 +707,9 @@ fun DashboardScreen(
             AddEditShortcutDialog(
                 shortcut = editingShortcut,
                 onDismiss = { editingShortcut = null },
-                onSave = { name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs ->
+                onSave = { name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs, oic ->
                     editingShortcut?.let {
-                        viewModel.updateShortcut(it.id, name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs)
+                        viewModel.updateShortcut(it.id, name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs, oic)
                     }
                     editingShortcut = null
                 }
@@ -878,7 +894,7 @@ fun HistoryItemRow(
 fun AddEditShortcutDialog(
     shortcut: ShortcutEntity? = null,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, String?, Boolean, String, String, String, Boolean) -> Unit
+    onSave: (String, String, String, String?, Boolean, String, String, String, Boolean, Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(shortcut?.name ?: "") }
     var url by remember { mutableStateOf(shortcut?.url ?: "") }
@@ -889,6 +905,7 @@ fun AddEditShortcutDialog(
     var vncColorDepth by remember { mutableStateOf(shortcut?.vncColorDepth ?: "24-bit") }
     var vncScale by remember { mutableStateOf(shortcut?.vncScale ?: "Fit to screen") }
     var isFullscreen by remember { mutableStateOf(shortcut?.isFullscreen ?: false) }
+    var openInChrome by remember { mutableStateOf(shortcut?.openInChrome ?: false) }
 
     // Automatic favicon detection
     LaunchedEffect(url, isVnc) {
@@ -1044,6 +1061,30 @@ fun AddEditShortcutDialog(
                             checkedTrackColor = if (isVnc) Color(0x6600BCD4) else Color(0x66FF9800)
                         )
                     )
+                }
+
+                // Open in Chrome switch
+                if (!isVnc) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Buka Chrome Tab", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Gunakan Chrome Tab di dalam aplikasi", color = Color.Gray, fontSize = 11.sp)
+                        }
+                        Switch(
+                            checked = openInChrome,
+                            onCheckedChange = { openInChrome = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFFFF9800),
+                                checkedTrackColor = Color(0x66FF9800)
+                            )
+                        )
+                    }
                 }
 
                 // VNC Quality Settings
@@ -1239,7 +1280,7 @@ fun AddEditShortcutDialog(
                     Button(
                         onClick = {
                             if (name.isNotBlank() && url.isNotBlank()) {
-                                onSave(name, url, selectedIcon, favIconUrl, isVnc, vncQuality, vncColorDepth, vncScale, isFullscreen)
+                                onSave(name, url, selectedIcon, favIconUrl, isVnc, vncQuality, vncColorDepth, vncScale, isFullscreen, openInChrome)
                             }
                         },
                         colors = ButtonDefaults.buttonColors(

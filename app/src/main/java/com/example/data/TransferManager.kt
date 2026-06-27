@@ -699,33 +699,62 @@ class TransferManager private constructor(
     }
 
     /**
-     * Copy a file from private storage to the public Downloads folder using MediaStore
+     * Copy a file from private storage to the public storage using MediaStore.
+     * Uses specific collections for Video/Images to ensure they appear in Gallery/Albums.
      */
     fun saveToPublicDownloads(file: File, mimeType: String?): Uri? {
         if (!file.exists()) return null
         
+        val resolver = context.contentResolver
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
             put(MediaStore.MediaColumns.MIME_TYPE, mimeType ?: "application/octet-stream")
+        }
+
+        val collection = when {
+            mimeType?.startsWith("video/") == true -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    contentValues.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES)
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                } else {
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                }
+            }
+            mimeType?.startsWith("image/") == true -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    contentValues.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
+                    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                } else {
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                }
+            }
+            else -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    contentValues.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                } else {
+                    // Fallback for older versions
+                    MediaStore.Files.getContentUri("external")
+                }
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+
+        val uri = try {
+            resolver.insert(collection, contentValues)
+        } catch (e: Exception) {
+            Log.e("TransferManager", "Insert failed, trying general Downloads: ${e.message}")
+            // Final fallback to Downloads if specific collection fails
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
-            }
-        }
-
-        val resolver = context.contentResolver
-        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Downloads.EXTERNAL_CONTENT_URI
-        } else {
-            // For older versions
-            if (mimeType?.startsWith("video/") == true) {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
             } else {
-                MediaStore.Files.getContentUri("external")
+                null
             }
         }
 
-        val uri = resolver.insert(collection, contentValues)
         uri?.let {
             try {
                 resolver.openOutputStream(it).use { output ->
@@ -738,12 +767,25 @@ class TransferManager private constructor(
                     contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
                     resolver.update(it, contentValues, null, null)
                 }
+                
+                // Trigger media scan for older devices or to be sure
+                android.media.MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(mimeType)) { _, _ -> }
             } catch (e: Exception) {
                 Log.e("TransferManager", "Error copying to MediaStore: ${e.message}")
                 return null
             }
         }
         return uri
+    }
+
+    /**
+     * Rename a file in internal storage
+     */
+    fun renameLocalFile(file: File, newName: String): File? {
+        if (!file.exists()) return null
+        val parent = file.parentFile ?: return null
+        val newFile = File(parent, newName)
+        return if (file.renameTo(newFile)) newFile else null
     }
 
     private fun formatSpeed(bytesPerSec: Long): String {
