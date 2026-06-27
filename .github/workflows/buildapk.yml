@@ -19,7 +19,9 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -34,7 +36,13 @@ jobs:
           fi
 
       - name: Build with Gradle
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          if ./gradlew --version > /dev/null 2>&1; then
+            ./gradlew assembleDebug --stacktrace
+          else
+            echo "Gradle wrapper is corrupt, falling back to system gradle"
+            gradle assembleDebug --stacktrace
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
