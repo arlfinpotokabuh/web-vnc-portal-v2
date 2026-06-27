@@ -37,6 +37,7 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
 
     init {
         refreshFilesList()
+        manager.resumeAllIncompleteTasks()
     }
 
     /**
@@ -77,9 +78,9 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
     /**
      * Add a download task
      */
-    fun addDownload(url: String, filename: String, isMultipart: Boolean = true, numParts: Int = 4) {
+    fun addDownload(url: String, filename: String, isMultipart: Boolean = true, numParts: Int = 4, userAgent: String? = null) {
         viewModelScope.launch {
-            manager.queueDownload(url, filename, isMultipart, numParts)
+            manager.queueDownload(url, filename, isMultipart, numParts, userAgent)
             refreshFilesList()
         }
     }
@@ -87,9 +88,9 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
     /**
      * Add an upload task using a file from internal storage
      */
-    fun addUpload(url: String, file: File, isMultipart: Boolean = true, numParts: Int = 4) {
+    fun addUpload(url: String, file: File, isMultipart: Boolean = true, numParts: Int = 4, userAgent: String? = null) {
         viewModelScope.launch {
-            manager.queueUpload(url, file, isMultipart, numParts)
+            manager.queueUpload(url, file, isMultipart, numParts, userAgent)
             refreshFilesList()
         }
     }

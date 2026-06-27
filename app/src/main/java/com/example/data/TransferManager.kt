@@ -24,6 +24,8 @@ class TransferManager private constructor(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val client = OkHttpClient.Builder().build()
     
+    private val DEFAULT_UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
+    
     // Active jobs tracking
     private val activeJobs = ConcurrentHashMap<Long, Job>()
     
@@ -45,8 +47,18 @@ class TransferManager private constructor(
     }
 
     /**
-     * Start/Resume a download or upload transfer task
+     * Start/Resume all tasks that are in PENDING or RUNNING status
      */
+    fun resumeAllIncompleteTasks() {
+        scope.launch {
+            val incompleteTasks = dao.getTransferTasksByStatus("PENDING") + 
+                                  dao.getTransferTasksByStatus("RUNNING")
+            incompleteTasks.forEach { task ->
+                startTransfer(task.id)
+            }
+        }
+    }
+
     fun startTransfer(taskId: Long) {
         // If already running, do nothing
         if (activeJobs.containsKey(taskId)) return
@@ -56,13 +68,14 @@ class TransferManager private constructor(
             Log.d("TransferManager", "Starting transfer ${task.id}: ${task.name}")
             
             // Set status to RUNNING initially
-            dao.updateTransferTask(task.copy(status = "RUNNING", errorMessage = null))
+            val runningTask = task.copy(status = "RUNNING", errorMessage = null)
+            dao.updateTransferTask(runningTask)
 
             try {
                 if (task.isDownload) {
-                    runDownload(task)
+                    runDownload(runningTask)
                 } else {
-                    runUpload(task)
+                    runUpload(runningTask)
                 }
             } catch (e: CancellationException) {
                 Log.d("TransferManager", "Transfer $taskId was cancelled/paused")
@@ -139,7 +152,7 @@ class TransferManager private constructor(
     /**
      * Queue a new download task
      */
-    fun queueDownload(url: String, filename: String, isMultipart: Boolean = true, numParts: Int = 4): Long {
+    fun queueDownload(url: String, filename: String, isMultipart: Boolean = true, numParts: Int = 4, userAgent: String? = null): Long {
         val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
         val localFile = File(storageDir, filename)
         
@@ -163,7 +176,8 @@ class TransferManager private constructor(
             status = "PENDING",
             localPath = finalFile.absolutePath,
             isMultipart = isMultipart,
-            numParts = numParts
+            numParts = numParts,
+            userAgent = userAgent
         )
 
         var id = 0L
@@ -178,7 +192,7 @@ class TransferManager private constructor(
     /**
      * Queue a new upload task
      */
-    fun queueUpload(url: String, localFile: File, isMultipart: Boolean = true, numParts: Int = 4): Long {
+    fun queueUpload(url: String, localFile: File, isMultipart: Boolean = true, numParts: Int = 4, userAgent: String? = null): Long {
         val task = TransferTask(
             name = localFile.name,
             url = url,
@@ -188,7 +202,8 @@ class TransferManager private constructor(
             status = "PENDING",
             localPath = localFile.absolutePath,
             isMultipart = isMultipart,
-            numParts = numParts
+            numParts = numParts,
+            userAgent = userAgent
         )
 
         var id = 0L
@@ -213,8 +228,13 @@ class TransferManager private constructor(
     // ---------------- DOWNLOAD IMPLEMENTATION ----------------
 
     private suspend fun runDownload(task: TransferTask) = coroutineScope {
+        val ua = task.userAgent ?: DEFAULT_UA
         // 1. Send an initial request to discover content length and range capabilities
-        val checkRequest = Request.Builder().url(task.url).head().build()
+        val checkRequest = Request.Builder()
+            .url(task.url)
+            .header("User-Agent", ua)
+            .head()
+            .build()
         var totalBytes = task.totalBytes
         var supportsRanges = false
 
@@ -227,12 +247,15 @@ class TransferManager private constructor(
                 }
             }
         } catch (e: Exception) {
-            // Fallback: try standard GET with a Range check or just a standard GET request later
+            // Fallback
         }
 
         if (totalBytes <= 0L) {
             // Try GET with headers if HEAD failed or didn't yield size
-            val getCheck = Request.Builder().url(task.url).build()
+            val getCheck = Request.Builder()
+                .url(task.url)
+                .header("User-Agent", ua)
+                .build()
             try {
                 client.newCall(getCheck).execute().use { response ->
                     if (response.isSuccessful) {
@@ -242,22 +265,21 @@ class TransferManager private constructor(
                     }
                 }
             } catch (e: Exception) {
-                // Ignore, will try downloading directly
+                // Ignore
             }
         }
 
         // If totalBytes is still invalid, we cannot do multipart, fall back to single-stream
         val canDoMultipart = supportsRanges && totalBytes > 0L && task.isMultipart
 
-        // Update total bytes in DB
-        dao.updateTransferTask(task.copy(totalBytes = totalBytes))
-
-        val destFile = File(task.localPath)
+        // Update total bytes in DB - using a fresh copy to avoid overwriting status
+        val updatedTask = task.copy(totalBytes = totalBytes, status = "RUNNING")
+        dao.updateTransferTask(updatedTask)
 
         if (canDoMultipart) {
-            runMultipartDownload(task, totalBytes)
+            runMultipartDownload(updatedTask, totalBytes)
         } else {
-            runSinglePartDownload(task)
+            runSinglePartDownload(updatedTask)
         }
     }
 
@@ -306,9 +328,11 @@ class TransferManager private constructor(
 
                     val requestStart = range.first + existingLength
                     val requestEnd = range.last
+                    val ua = task.userAgent ?: DEFAULT_UA
 
                     val request = Request.Builder()
                         .url(task.url)
+                        .header("User-Agent", ua)
                         .addHeader("Range", "bytes=$requestStart-$requestEnd")
                         .build()
 
@@ -387,10 +411,13 @@ class TransferManager private constructor(
     private suspend fun runSinglePartDownload(task: TransferTask) = coroutineScope {
         val destFile = File(task.localPath)
         val tempFile = File(destFile.absolutePath + ".part")
+        val ua = task.userAgent ?: DEFAULT_UA
         
         val existingLength = if (tempFile.exists()) tempFile.length() else 0L
         
-        val requestBuilder = Request.Builder().url(task.url)
+        val requestBuilder = Request.Builder()
+            .url(task.url)
+            .header("User-Agent", ua)
         if (existingLength > 0) {
             requestBuilder.addHeader("Range", "bytes=$existingLength-")
         }
@@ -453,10 +480,20 @@ class TransferManager private constructor(
 
                 val finalTask = dao.getTransferTaskById(task.id)
                 if (finalTask != null) {
-                    dao.updateTransferTask(finalTask.copy(
-                        transferredBytes = destFile.length(),
-                        status = "COMPLETED"
-                    ))
+                    val finalSize = destFile.length()
+                    
+                    // IF 0B and we expected more, it's a failure
+                    if (finalSize == 0L && task.totalBytes > 0) {
+                        dao.updateTransferTask(finalTask.copy(
+                            status = "FAILED",
+                            errorMessage = "Downloaded file is empty (0 bytes). Link may be expired or requires specific cookies/session."
+                        ))
+                    } else {
+                        dao.updateTransferTask(finalTask.copy(
+                            transferredBytes = finalSize,
+                            status = "COMPLETED"
+                        ))
+                    }
                 }
             }
         } finally {

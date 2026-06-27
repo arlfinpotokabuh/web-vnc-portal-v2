@@ -188,6 +188,10 @@ class ShortcutViewModel(application: Application) : AndroidViewModel(application
         _isMobileView.value = mobile
     }
 
+    fun toggleMobileView() {
+        _isMobileView.value = !_isMobileView.value
+    }
+
     fun setFullscreenMode(fullscreen: Boolean) {
         _isFullscreenMode.value = fullscreen
     }

@@ -15,6 +15,7 @@ data class TransferTask(
     val localPath: String, // path within internal/external files directory
     val isMultipart: Boolean = true,
     val numParts: Int = 4,
+    val userAgent: String? = null,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )

@@ -5,6 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import android.os.Bundle
 import android.webkit.*
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -71,9 +72,13 @@ import com.example.data.ShortcutEntity
 import com.example.ui.ShortcutViewModel
 import com.example.ui.TransferViewModel
 import com.example.ui.TransferScreen
+import com.example.ui.TransferManagerTab
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.ByteArrayInputStream
@@ -91,6 +96,21 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+data class DetectedVideo(
+    val url: String,
+    val title: String,
+    val size: String = "Calculating...",
+    val mimeType: String? = null,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+fun formatFileSize(size: Long): String {
+    if (size <= 0) return "Unknown size"
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt()
+    return String.format("%.1f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
 }
 
 @Composable
@@ -275,6 +295,7 @@ fun MainContent() {
                 TaskSwitcherOverlay(
                     activeSessions = activeSessions,
                     focusedIndex = focusedIndex,
+                    transferViewModel = transferViewModel,
                     onSwitch = { viewModel.switchSession(it) },
                     onClose = { viewModel.closeSession(it) },
                     onCloseAll = { viewModel.closeAllSessions() },
@@ -1242,17 +1263,20 @@ fun AddEditShortcutDialog(
 fun TaskSwitcherOverlay(
     activeSessions: List<ShortcutEntity>,
     focusedIndex: Int,
+    transferViewModel: TransferViewModel,
     onSwitch: (Int) -> Unit,
     onClose: (Int) -> Unit,
     onCloseAll: () -> Unit,
     onBackToHome: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    var selectedTab by remember { mutableStateOf(0) } // 0 = Tasks, 1 = Downloads
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 500.dp)
+                .heightIn(max = 600.dp)
                 .padding(16.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E22)),
             shape = RoundedCornerShape(24.dp),
@@ -1264,12 +1288,30 @@ fun TaskSwitcherOverlay(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        "Tugas Aktif",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
+                    TabRow(
+                        selectedTabIndex = selectedTab,
+                        containerColor = Color.Transparent,
+                        contentColor = Color(0xFF00BCD4),
+                        divider = {},
+                        indicator = { tabPositions ->
+                            TabRowDefaults.Indicator(
+                                Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                                color = Color(0xFF00BCD4)
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Tab(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            text = { Text("Tugas Aktif", fontSize = 14.sp, fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal) }
+                        )
+                        Tab(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            text = { Text("Unduhan", fontSize = 14.sp, fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal) }
+                        )
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Tutup", tint = Color.Gray)
                     }
@@ -1277,63 +1319,71 @@ fun TaskSwitcherOverlay(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                if (activeSessions.isEmpty()) {
-                    Text("Tidak ada tugas aktif", color = Color.Gray, modifier = Modifier.padding(vertical = 32.dp).align(Alignment.CenterHorizontally))
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f, fill = false),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        itemsIndexed(activeSessions) { index, session ->
-                            val isFocused = index == focusedIndex
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        color = if (isFocused) Color(0x1A00BCD4) else Color(0xFF151518),
-                                        shape = RoundedCornerShape(12.dp)
+                if (selectedTab == 0) {
+                    // TASKS TAB
+                    if (activeSessions.isEmpty()) {
+                        Text("Tidak ada tugas aktif", color = Color.Gray, modifier = Modifier.padding(vertical = 32.dp).align(Alignment.CenterHorizontally))
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f, fill = false),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            itemsIndexed(activeSessions) { index, session ->
+                                val isFocused = index == focusedIndex
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            color = if (isFocused) Color(0x1A00BCD4) else Color(0xFF151518),
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .border(
+                                            width = 1.dp,
+                                            color = if (isFocused) Color(0xFF00BCD4) else Color.Transparent,
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { 
+                                            onSwitch(index)
+                                            onDismiss()
+                                        }
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    ShortcutIcon(
+                                        iconName = session.iconName,
+                                        favIconUrl = session.favIconUrl,
+                                        tint = if (session.isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800),
+                                        modifier = Modifier.size(32.dp)
                                     )
-                                    .border(
-                                        width = 1.dp,
-                                        color = if (isFocused) Color(0xFF00BCD4) else Color.Transparent,
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable { 
-                                        onSwitch(index)
-                                        onDismiss()
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            session.name,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            session.url,
+                                            color = Color.Gray,
+                                            fontSize = 10.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                ShortcutIcon(
-                                    iconName = session.iconName,
-                                    favIconUrl = session.favIconUrl,
-                                    tint = if (session.isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800),
-                                    modifier = Modifier.size(32.dp)
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        session.name,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        session.url,
-                                        color = Color.Gray,
-                                        fontSize = 10.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                IconButton(onClick = { onClose(index) }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Tutup Tugas", tint = Color.Red, modifier = Modifier.size(18.dp))
+                                    IconButton(onClick = { onClose(index) }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Tutup Tugas", tint = Color.Red, modifier = Modifier.size(18.dp))
+                                    }
                                 }
                             }
                         }
+                    }
+                } else {
+                    // DOWNLOADS TAB
+                    Box(modifier = Modifier.weight(1f, fill = false)) {
+                        TransferManagerTab(viewModel = transferViewModel)
                     }
                 }
 
@@ -1358,15 +1408,17 @@ fun TaskSwitcherOverlay(
                         Text("Beranda", fontSize = 12.sp)
                     }
                     
-                    Button(
-                        onClick = onCloseAll,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Tutup Semua", fontSize = 12.sp)
+                    if (selectedTab == 0) {
+                        Button(
+                            onClick = onCloseAll,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Tutup Semua", fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -1449,8 +1501,12 @@ fun WebViewerScreen(
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
     var showController by remember { mutableStateOf(true) }
-    var detectedVideos by remember { mutableStateOf(listOf<Pair<String, String>>()) } // List of (Url, Title)
+    var detectedVideos by remember { mutableStateOf(listOf<DetectedVideo>()) } 
     var showDetectionNotification by remember { mutableStateOf(false) }
+    
+    // Fullscreen Video State
+    var customView by remember { mutableStateOf<View?>(null) }
+    var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
     // Draggable Bubble State
     var bubbleOffset by remember { mutableStateOf(IntOffset(0, 0)) }
@@ -1470,6 +1526,11 @@ fun WebViewerScreen(
 
                 WebView(ctx).apply {
                     webViewRef = this
+                    
+                    // Enable Cookies for this specific instance
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
                     setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
                         val filename = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype) ?: "download_file"
                         transferViewModel.addDownload(url, filename)
@@ -1482,9 +1543,27 @@ fun WebViewerScreen(
                             @android.webkit.JavascriptInterface
                             fun onVideoDetected(src: String, title: String) {
                                 scope.launch {
-                                    if (!detectedVideos.any { it.first == src }) {
-                                        detectedVideos = detectedVideos + (src to title)
+                                    if (!detectedVideos.any { it.url == src }) {
+                                        val newVideo = DetectedVideo(url = src, title = title)
+                                        detectedVideos = (detectedVideos + newVideo).distinctBy { it.url }
                                         showDetectionNotification = true
+                                        
+                                        // Fetch metadata
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                val client = OkHttpClient.Builder().build()
+                                                val headRequest = Request.Builder().url(src).head().build()
+                                                client.newCall(headRequest).execute().use { response ->
+                                                    val contentLength = response.header("Content-Length")?.toLongOrNull()
+                                                    val formattedSize = if (contentLength != null) formatFileSize(contentLength) else "Unknown size"
+                                                    withContext(Dispatchers.Main) {
+                                                        detectedVideos = detectedVideos.map { 
+                                                            if (it.url == src) it.copy(size = formattedSize) else it 
+                                                        }
+                                                    }
+                                                }
+                                            } catch (e: Exception) {}
+                                        }
                                     }
                                 }
                             }
@@ -1509,6 +1588,8 @@ fun WebViewerScreen(
                         databaseEnabled = true
                         allowContentAccess = true
                         allowFileAccess = true
+                        allowFileAccessFromFileURLs = true
+                        allowUniversalAccessFromFileURLs = true
                         mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                         useWideViewPort = true
                         loadWithOverviewMode = true
@@ -1516,29 +1597,116 @@ fun WebViewerScreen(
                         displayZoomControls = false
                         setSupportZoom(true)
                         cacheMode = WebSettings.LOAD_DEFAULT
+                        defaultTextEncodingName = "utf-8"
+                        loadsImagesAutomatically = true
+                        textZoom = 100
                         
-                        // Apply mobile/desktop UA initially inside the settings apply
+                        // Layout improvements
+                        layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
+                        
+                        // HTML5 Enhancements
+                        javaScriptCanOpenWindowsAutomatically = true
+                        mediaPlaybackRequiresUserGesture = false
+                        setSupportMultipleWindows(false)
+                        setGeolocationEnabled(true)
+                        
+                        // Modern Chrome UA for better rendering
                         userAgentString = if (isMobileView) {
-                            "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Mobile Safari/537.36"
+                            "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
                         } else {
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36"
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
                         }
+
+                        // Security & Stability
+                        setSafeBrowsingEnabled(false)
                     }
+
+                    // Enable Cookies
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                    // Explicitly enable hardware acceleration
+                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                    
+                    requestFocus()
 
                     webChromeClient = object : WebChromeClient() {
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
                             progress = newProgress
                         }
+
+                        override fun onGeolocationPermissionsShowPrompt(
+                            origin: String?,
+                            callback: GeolocationPermissions.Callback?
+                        ) {
+                            callback?.invoke(origin, true, false)
+                        }
+
+                        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                            if (customView != null) {
+                                callback?.onCustomViewHidden()
+                                return
+                            }
+                            customView = view
+                            customViewCallback = callback
+                        }
+
+                        override fun onHideCustomView() {
+                            customView = null
+                            customViewCallback?.onCustomViewHidden()
+                            customViewCallback = null
+                        }
                     }
 
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            url?.let { 
-                                currentUrl = it
-                                viewModel.saveWebHistory(it, view?.title ?: "")
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                val url = request?.url?.toString() ?: return false
+                                if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                                    return try {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                        ctx.startActivity(intent)
+                                        true
+                                    } catch (e: Exception) {
+                                        false
+                                    }
+                                }
+                                return false
                             }
-                            canGoBack = view?.canGoBack() ?: false
-                            canGoForward = view?.canGoForward() ?: false
+
+                            override fun onReceivedSslError(
+                                view: WebView?,
+                                handler: SslErrorHandler?,
+                                error: android.net.http.SslError?
+                            ) {
+                                handler?.proceed()
+                            }
+
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                // Force viewport correction for complex dashboards
+                                view?.evaluateJavascript(
+                                    """
+                                    (function() {
+                                        var meta = document.querySelector('meta[name="viewport"]');
+                                        if (!meta) {
+                                            meta = document.createElement('meta');
+                                            meta.name = 'viewport';
+                                            document.getElementsByTagName('head')[0].appendChild(meta);
+                                        }
+                                        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes';
+                                        
+                                        // Force redraw for SPAs
+                                        setTimeout(function() { window.dispatchEvent(new Event('resize')); }, 500);
+                                    })();
+                                    """.trimIndent(),
+                                    null
+                                )
+                                
+                                url?.let { 
+                                    currentUrl = it
+                                    viewModel.saveWebHistory(it, view?.title ?: "")
+                                }
+                                canGoBack = view?.canGoBack() ?: false
+                                canGoForward = view?.canGoForward() ?: false
                             
                             // Inject auto video detection scanner
                             view?.evaluateJavascript("""
@@ -1647,7 +1815,7 @@ fun WebViewerScreen(
                             """.trimIndent(), null)
                         }
 
-                        // THE MAGICAL INTERCEPTOR FOR BYPASSING IFRAME X-FRAME-OPTIONS & CSP FOR ALL POPULAR WEBSITES
+                        // THE MAGICAL INTERCEPTOR
                         override fun shouldInterceptRequest(
                             view: WebView?,
                             request: WebResourceRequest?
@@ -1656,134 +1824,73 @@ fun WebViewerScreen(
                             val urlStr = request.url.toString()
                             val lowerUrl = urlStr.lowercase()
 
-                            // NETWORK-LEVEL VIDEO DETECTION
                             val videoExtensions = listOf(".mp4", ".m3u8", ".webm", ".mov", ".avi", ".ts", ".mpd", "manifest", "playlist.m3u8", "chunklist", "get_video", "googlevideo", "stream")
                             if (videoExtensions.any { lowerUrl.contains(it) } && 
                                 !lowerUrl.contains(".js") && !lowerUrl.contains(".css") && !lowerUrl.contains(".png") && !lowerUrl.contains(".jpg") && !lowerUrl.contains(".woff")) {
-                                android.util.Log.d("VideoDetection", "Detected URL: $urlStr")
+                                
+                                // SAFE DETECTION: Run UI interactions on Main thread
                                 scope.launch {
-                                    if (!detectedVideos.any { it.first == urlStr }) {
-                                        val title = view?.title ?: "Video Terdeteksi"
-                                        detectedVideos = (detectedVideos + (urlStr to title)).distinctBy { it.first }
-                                        showDetectionNotification = true
-                                    }
-                                }
-                            }
-                            
-                            // To prevent blocking local or secure traffic unnecessarily, we only intercept HTML/Document requests
-                            val isHtmlRequest = request.method.equals("GET", ignoreCase = true) && 
-                                    (request.isForMainFrame || urlStr.contains(".html") || !urlStr.substringAfterLast("/", "").contains("."))
-                            
-                            if (isHtmlRequest && (urlStr.startsWith("http://") || urlStr.startsWith("https://"))) {
-                                try {
-                                    val client = OkHttpClient.Builder()
-                                        .followRedirects(true)
-                                        .followSslRedirects(true)
-                                        .build()
-
-                                    val reqBuilder = Request.Builder().url(urlStr)
-                                    request.requestHeaders.forEach { (k, v) ->
-                                        reqBuilder.addHeader(k, v)
-                                    }
+                                    val title = view?.title ?: "Video Terdeteksi"
+                                    val currentUa = view?.settings?.userAgentString ?: ""
                                     
-                                    // Set dynamic User-Agent in subrequests
-                                    reqBuilder.header("User-Agent", view?.settings?.userAgentString ?: "")
-
-                                    val response = client.newCall(reqBuilder.build()).execute()
-                                    val body = response.body
-                                    if (body != null) {
-                                        val contentType = body.contentType()
-                                        val mimeType = contentType?.type + "/" + contentType?.subtype
-                                        val encoding = contentType?.charset()?.name() ?: "UTF-8"
+                                    if (!detectedVideos.any { it.url == urlStr }) {
+                                        val newVideo = DetectedVideo(url = urlStr, title = title)
+                                        detectedVideos = (detectedVideos + newVideo).distinctBy { it.url }
+                                        showDetectionNotification = true
                                         
-                                        // MODIFICATION: Inject our JS into every HTML response to ensure it reaches IFRAMES!
-                                        var html = body.string()
-                                        val injectionScript = """
-                                            <script>
-                                            (function() {
-                                                if (window.videoDetectionInterval) return;
-                                                var videoStatus = new Map();
-                                                window.videoDetectionInterval = setInterval(function() {
-                                                    var videos = document.getElementsByTagName('video');
-                                                    var now = Date.now();
-                                                    for (var i = 0; i < videos.length; i++) {
-                                                        var video = videos[i];
-                                                        var src = video.currentSrc || video.src;
-                                                        if (!src) continue;
-                                                        if (!videoStatus.has(video) || videoStatus.get(video).src !== src) {
-                                                            videoStatus.set(video, { src: src, accumulatedPlayTime: 0, lastUpdate: now, triggered: false });
-                                                        }
-                                                        var state = videoStatus.get(video);
-                                                        if (!video.paused && !video.ended && video.readyState >= 2) {
-                                                            var delta = now - state.lastUpdate;
-                                                            state.accumulatedPlayTime += delta;
-                                                            state.lastUpdate = now;
-                                                            if (state.accumulatedPlayTime >= 5000 && !state.triggered) {
-                                                                if (window.VideoDetector) {
-                                                                    state.triggered = true;
-                                                                    window.VideoDetector.onVideoDetected(src, document.title || "Video");
-                                                                }
-                                                            }
-                                                        } else {
-                                                            state.lastUpdate = now;
+                                        // Fetch metadata asynchronously
+                                        scope.launch(Dispatchers.IO) {
+                                            try {
+                                                val client = OkHttpClient.Builder()
+                                                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                                                    .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                                                    .build()
+                                                val headRequest = Request.Builder()
+                                                    .url(urlStr)
+                                                    .head()
+                                                    .header("User-Agent", currentUa)
+                                                    .build()
+                                                
+                                                client.newCall(headRequest).execute().use { response ->
+                                                    val contentLength = response.header("Content-Length")?.toLongOrNull()
+                                                    val contentType = response.header("Content-Type")
+                                                    val formattedSize = if (contentLength != null) formatFileSize(contentLength) else "Unknown size"
+                                                    
+                                                    withContext(Dispatchers.Main) {
+                                                        detectedVideos = detectedVideos.map { 
+                                                            if (it.url == urlStr) it.copy(size = formattedSize, mimeType = contentType) else it 
                                                         }
                                                     }
-                                                }, 1000);
-                                            })();
-                                            </script>
-                                        """.trimIndent()
-                                        
-                                        if (html.contains("<head>", ignoreCase = true)) {
-                                            html = html.replace("<head>", "<head>$injectionScript", ignoreCase = true)
-                                        } else if (html.contains("<html>", ignoreCase = true)) {
-                                            html = html.replace("<html>", "<html>$injectionScript", ignoreCase = true)
-                                        } else {
-                                            html = injectionScript + html
-                                        }
-
-                                        // FILTER HEADERS: Strip CSP and X-Frame-Options to allow framing/iframes!
-                                        val headersMap = mutableMapOf<String, String>()
-                                        response.headers.forEach { pair ->
-                                            val lowerKey = pair.first.lowercase(Locale.ROOT)
-                                            if (lowerKey != "x-frame-options" &&
-                                                lowerKey != "content-security-policy" &&
-                                                lowerKey != "content-security-policy-report-only" &&
-                                                lowerKey != "frame-options"
-                                            ) {
-                                                headersMap[pair.first] = pair.second
+                                                }
+                                            } catch (e: Exception) {
+                                                withContext(Dispatchers.Main) {
+                                                    detectedVideos = detectedVideos.map { 
+                                                        if (it.url == urlStr) it.copy(size = "Streaming / Live") else it 
+                                                    }
+                                                }
                                             }
                                         }
-
-                                        // Enable CORS for everything we intercept
-                                        headersMap["Access-Control-Allow-Origin"] = "*"
-                                        headersMap["Access-Control-Allow-Headers"] = "*"
-
-                                        return WebResourceResponse(
-                                            mimeType,
-                                            encoding,
-                                            response.code,
-                                            "OK",
-                                            headersMap,
-                                            html.byteInputStream()
-                                        )
                                     }
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
                                 }
                             }
                             return null
                         }
                     }
-
                     loadUrl(shortcut.url)
+
+                                        
+                                        
+
+
+
                 }
             },
             update = { webView ->
                 // Dynamically update user agent if desktop/mobile view toggles
                 val expectedUa = if (isMobileView) {
-                    "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Mobile Safari/537.36"
+                    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
                 } else {
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36"
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
                 }
                 if (webView.settings.userAgentString != expectedUa) {
                     webView.settings.userAgentString = expectedUa
@@ -1821,9 +1928,13 @@ fun WebViewerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 500.dp)
+                    .heightIn(max = 400.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Box(
                             modifier = Modifier
                                 .size(36.dp)
@@ -1837,44 +1948,113 @@ fun WebViewerScreen(
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Video Terdeteksi! (${detectedVideos.size})",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                fontSize = 15.sp
-                            )
-                            val lastVideo = detectedVideos.lastOrNull()
-                            Text(
-                                text = lastVideo?.second ?: "Siap diunduh",
-                                color = Color.LightGray,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        Text(
+                            text = "Video Terdeteksi (${detectedVideos.size})",
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { showDetectionNotification = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
                         }
                     }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .padding(vertical = 4.dp)
+                    ) {
+                        items(detectedVideos.asReversed()) { video ->
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A2E)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clickable { 
+                                        val guessName = android.webkit.URLUtil.guessFileName(video.url, null, null) ?: "video.mp4"
+                                        val finalName = if (guessName.endsWith(".bin") || !guessName.contains(".")) "video_download.mp4" else guessName
+                                        val currentUa = webViewRef?.settings?.userAgentString
+                                        transferViewModel.addDownload(video.url, finalName, userAgent = currentUa)
+                                        android.widget.Toast.makeText(context, "Mulai mengunduh...", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(50.dp)
+                                            .background(Color(0xFF333338), RoundedCornerShape(8.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayCircle,
+                                            contentDescription = null,
+                                            tint = Color(0xFFFF9800),
+                                            modifier = Modifier.size(30.dp)
+                                        )
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = video.title,
+                                            color = Color.White,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = video.size,
+                                                color = Color(0xFFFF9800),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            if (video.mimeType != null) {
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = video.mimeType.split("/").last().uppercase(),
+                                                    color = Color.Gray,
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = video.url,
+                                            color = Color.DarkGray,
+                                            fontSize = 10.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
                     Spacer(modifier = Modifier.height(12.dp))
+                    
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(
-                            onClick = { 
-                                showDetectionNotification = false
-                                detectedVideos = emptyList() // Clear once tutup
-                            }
-                        ) {
-                            Text("Tutup", color = Color.Gray)
+                        TextButton(onClick = { detectedVideos = emptyList(); showDetectionNotification = false }) {
+                            Text("Hapus Semua", color = Color(0xFFF44336))
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = {
-                                detectedVideos.forEach { (url, title) ->
-                                    val guessName = android.webkit.URLUtil.guessFileName(url, null, null) ?: "video_download.mp4"
+                                detectedVideos.forEach { video ->
+                                    val guessName = android.webkit.URLUtil.guessFileName(video.url, null, null) ?: "video.mp4"
                                     val finalName = if (guessName.endsWith(".bin") || !guessName.contains(".")) "video_download.mp4" else guessName
-                                    transferViewModel.addDownload(url, finalName)
+                                    transferViewModel.addDownload(video.url, finalName)
                                 }
                                 android.widget.Toast.makeText(context, "Mulai mengunduh ${detectedVideos.size} video...", android.widget.Toast.LENGTH_SHORT).show()
                                 detectedVideos = emptyList()
@@ -1997,6 +2177,18 @@ fun WebViewerScreen(
                                 Icon(Icons.Default.Refresh, contentDescription = "Muat Ulang", tint = Color.White)
                             }
 
+                            // Mobile Mode Toggle
+                            IconButton(
+                                onClick = { viewModel.toggleMobileView() },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isMobileView) Icons.Default.StayCurrentPortrait else Icons.Default.DesktopWindows,
+                                    contentDescription = "Mobile Mode",
+                                    tint = if (isMobileView) Color(0xFFFF9800) else Color.White
+                                )
+                            }
+
                             // Toggle Bubble Visibility
                             IconButton(
                                 onClick = { isBubbleVisible = !isBubbleVisible },
@@ -2060,6 +2252,14 @@ fun WebViewerScreen(
                     }
                 }
             }
+        }
+
+        // Fullscreen Video Container
+        customView?.let { view ->
+            AndroidView(
+                factory = { view },
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }

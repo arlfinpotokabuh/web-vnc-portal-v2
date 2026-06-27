@@ -222,7 +222,7 @@ fun TransferTaskRow(
                 ) {
                     if (task.status == "PENDING" || task.status == "RUNNING") {
                         IconButton(onClick = onPause, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Warning, contentDescription = "Jeda", tint = Color(0xFFFF9800), modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Pause, contentDescription = "Jeda", tint = Color(0xFFFF9800), modifier = Modifier.size(18.dp))
                         }
                     } else if (task.status == "PAUSED" || task.status == "FAILED") {
                         IconButton(onClick = onResume, modifier = Modifier.size(32.dp)) {

@@ -20,6 +20,9 @@ interface TransferDao {
     @Delete
     suspend fun deleteTransferTask(task: TransferTask)
 
+    @Query("SELECT * FROM transfer_tasks WHERE status = :status")
+    suspend fun getTransferTasksByStatus(status: String): List<TransferTask>
+
     @Query("DELETE FROM transfer_tasks")
     suspend fun clearAllTransferTasks()
 }
