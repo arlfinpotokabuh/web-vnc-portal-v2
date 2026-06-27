@@ -16,6 +16,7 @@ data class TransferTask(
     val isMultipart: Boolean = true,
     val numParts: Int = 4,
     val userAgent: String? = null,
+    val mimeType: String? = null,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )

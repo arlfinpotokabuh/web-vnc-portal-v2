@@ -126,7 +126,16 @@ fun TransferManagerTab(viewModel: TransferViewModel) {
                         speed = speeds[task.id] ?: "",
                         onPause = { viewModel.pauseTransfer(task.id) },
                         onResume = { viewModel.resumeTransfer(task.id) },
-                        onDelete = { viewModel.deleteTransfer(task.id) }
+                        onDelete = { viewModel.deleteTransfer(task.id) },
+                        onExport = {
+                            viewModel.exportToPublic(task) { success ->
+                                if (success) {
+                                    Toast.makeText(context, "Berhasil disimpan ke folder Downloads!", Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(context, "Gagal mengekspor file.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -164,7 +173,8 @@ fun TransferTaskRow(
     speed: String,
     onPause: () -> Unit,
     onResume: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onExport: () -> Unit
 ) {
     val context = LocalContext.current
     
@@ -227,6 +237,10 @@ fun TransferTaskRow(
                     } else if (task.status == "PAUSED" || task.status == "FAILED") {
                         IconButton(onClick = onResume, modifier = Modifier.size(32.dp)) {
                             Icon(Icons.Default.PlayArrow, contentDescription = "Lanjutkan", tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
+                        }
+                    } else if (task.status == "COMPLETED" && task.isDownload) {
+                        IconButton(onClick = onExport, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.DownloadForOffline, contentDescription = "Simpan ke Galeri", tint = Color(0xFF00BCD4), modifier = Modifier.size(20.dp))
                         }
                     }
 
@@ -431,7 +445,16 @@ fun StorageFilesTab(viewModel: TransferViewModel) {
                         file = file,
                         onOpen = { fileToPreview = file },
                         onUpload = { showUploadDialogForFile = file },
-                        onDelete = { viewModel.deleteLocalFile(file) }
+                        onDelete = { viewModel.deleteLocalFile(file) },
+                        onExport = {
+                            viewModel.exportFileToPublic(file) { success ->
+                                if (success) {
+                                    Toast.makeText(context, "Berhasil diekspor ke folder Downloads!", Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(context, "Gagal mengekspor file.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -463,7 +486,8 @@ fun StorageFileRow(
     file: File,
     onOpen: () -> Unit,
     onUpload: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onExport: () -> Unit
 ) {
     val context = LocalContext.current
     val sizeText = Formatter.formatShortFileSize(context, file.length())
@@ -529,6 +553,11 @@ fun StorageFileRow(
                 // Upload button
                 IconButton(onClick = onUpload, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.Share, contentDescription = "Unggah", tint = Color(0xFF00BCD4), modifier = Modifier.size(16.dp))
+                }
+
+                // Export button
+                IconButton(onClick = onExport, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.DownloadForOffline, contentDescription = "Ekspor ke Galeri", tint = Color(0xFFFF9800), modifier = Modifier.size(16.dp))
                 }
 
                 // Delete button

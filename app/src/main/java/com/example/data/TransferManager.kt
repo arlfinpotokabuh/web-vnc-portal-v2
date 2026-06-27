@@ -1,7 +1,11 @@
 package com.example.data
 
+import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -167,6 +171,8 @@ class TransferManager private constructor(
             counter++
         }
 
+        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+
         val task = TransferTask(
             name = finalFile.name,
             url = url,
@@ -177,7 +183,8 @@ class TransferManager private constructor(
             localPath = finalFile.absolutePath,
             isMultipart = isMultipart,
             numParts = numParts,
-            userAgent = userAgent
+            userAgent = userAgent,
+            mimeType = mimeType
         )
 
         var id = 0L
@@ -193,6 +200,9 @@ class TransferManager private constructor(
      * Queue a new upload task
      */
     fun queueUpload(url: String, localFile: File, isMultipart: Boolean = true, numParts: Int = 4, userAgent: String? = null): Long {
+        val ext = localFile.extension
+        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+        
         val task = TransferTask(
             name = localFile.name,
             url = url,
@@ -203,7 +213,8 @@ class TransferManager private constructor(
             localPath = localFile.absolutePath,
             isMultipart = isMultipart,
             numParts = numParts,
-            userAgent = userAgent
+            userAgent = userAgent,
+            mimeType = mimeType
         )
 
         var id = 0L
@@ -398,6 +409,13 @@ class TransferManager private constructor(
             // Complete task
             val finalTask = dao.getTransferTaskById(task.id)
             if (finalTask != null) {
+                // Auto-export to public Downloads for visibility
+                try {
+                    saveToPublicDownloads(destFile, task.mimeType)
+                } catch (e: Exception) {
+                    Log.e("TransferManager", "Failed to auto-export multipart: ${e.message}")
+                }
+
                 dao.updateTransferTask(finalTask.copy(
                     transferredBytes = totalBytes,
                     status = "COMPLETED"
@@ -489,6 +507,13 @@ class TransferManager private constructor(
                             errorMessage = "Downloaded file is empty (0 bytes). Link may be expired or requires specific cookies/session."
                         ))
                     } else {
+                        // Auto-export to public Downloads for visibility
+                        try {
+                            saveToPublicDownloads(destFile, task.mimeType)
+                        } catch (e: Exception) {
+                            Log.e("TransferManager", "Failed to auto-export: ${e.message}")
+                        }
+
                         dao.updateTransferTask(finalTask.copy(
                             transferredBytes = finalSize,
                             status = "COMPLETED"
@@ -671,6 +696,54 @@ class TransferManager private constructor(
         } finally {
             speedJob.cancel()
         }
+    }
+
+    /**
+     * Copy a file from private storage to the public Downloads folder using MediaStore
+     */
+    fun saveToPublicDownloads(file: File, mimeType: String?): Uri? {
+        if (!file.exists()) return null
+        
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType ?: "application/octet-stream")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+
+        val resolver = context.contentResolver
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        } else {
+            // For older versions
+            if (mimeType?.startsWith("video/") == true) {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            } else {
+                MediaStore.Files.getContentUri("external")
+            }
+        }
+
+        val uri = resolver.insert(collection, contentValues)
+        uri?.let {
+            try {
+                resolver.openOutputStream(it).use { output ->
+                    file.inputStream().use { input ->
+                        input.copyTo(output!!)
+                    }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    contentValues.clear()
+                    contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(it, contentValues, null, null)
+                }
+            } catch (e: Exception) {
+                Log.e("TransferManager", "Error copying to MediaStore: ${e.message}")
+                return null
+            }
+        }
+        return uri
     }
 
     private fun formatSpeed(bytesPerSec: Long): String {

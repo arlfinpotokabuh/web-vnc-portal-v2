@@ -110,6 +110,36 @@ class TransferViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
+     * Export a completed task to public storage
+     */
+    fun exportToPublic(task: TransferTask, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val file = java.io.File(task.localPath)
+            if (file.exists()) {
+                val uri = manager.saveToPublicDownloads(file, task.mimeType)
+                onComplete(uri != null)
+            } else {
+                onComplete(false)
+            }
+        }
+    }
+
+    /**
+     * Export a specific File to public storage
+     */
+    fun exportFileToPublic(file: File, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            if (file.exists()) {
+                val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension)
+                val uri = manager.saveToPublicDownloads(file, mimeType)
+                onComplete(uri != null)
+            } else {
+                onComplete(false)
+            }
+        }
+    }
+
+    /**
      * Delete a transfer task from database and cleanup its temporary files
      */
     fun deleteTransfer(taskId: Long) {
