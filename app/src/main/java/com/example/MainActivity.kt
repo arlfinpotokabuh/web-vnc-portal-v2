@@ -1,6 +1,8 @@
 package com.example
 
 import android.app.Application
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import android.os.Bundle
 import android.webkit.*
 import androidx.activity.ComponentActivity
@@ -15,12 +17,20 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.res.painterResource
+import coil.compose.AsyncImage
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -101,8 +111,11 @@ fun MainContent() {
     })
 
     val activeShortcut by viewModel.activeShortcut.collectAsStateWithLifecycle()
+    val activeSessions by viewModel.activeSessions.collectAsStateWithLifecycle()
+    val focusedIndex by viewModel.focusedSessionIndex.collectAsStateWithLifecycle()
     val isFullscreenMode by viewModel.isFullscreenMode.collectAsStateWithLifecycle()
     var activeTab by remember { mutableStateOf(0) } // 0 = Portal, 1 = Transfers & Storage
+    var showTaskSwitcher by remember { mutableStateOf(false) }
 
     // Handle intent deep linking / App Link (like webvnc://open?url=... or standard http/https links)
     val activity = LocalContext.current as? ComponentActivity
@@ -148,7 +161,7 @@ fun MainContent() {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            if (activeShortcut == null) {
+            if (activeSessions.isEmpty()) {
                 NavigationBar(
                     containerColor = Color(0xFF1E1E22),
                     contentColor = Color(0xFFFF9800)
@@ -190,49 +203,84 @@ fun MainContent() {
                 .fillMaxSize()
                 .background(Color(0xFF121214)) // Deep sleek charcoal background
         ) {
-            AnimatedContent(
-                targetState = activeShortcut,
-                transitionSpec = {
-                    fadeIn() togetherWith fadeOut()
-                },
-                label = "ScreenTransition"
-            ) { shortcut ->
-                if (shortcut == null) {
-                    AnimatedContent(
-                        targetState = activeTab,
-                        transitionSpec = {
-                            fadeIn() togetherWith fadeOut()
-                        },
-                        label = "TabContentTransition"
-                    ) { tab ->
-                        if (tab == 0) {
-                            DashboardScreen(
-                                viewModel = viewModel,
-                                modifier = Modifier.padding(innerPadding)
-                            )
-                        } else {
-                            TransferScreen(
-                                transferViewModel = transferViewModel,
-                                modifier = Modifier.padding(innerPadding)
-                            )
-                        }
-                    }
-                } else {
-                    if (shortcut.isVnc) {
-                        VncViewerScreen(
-                            shortcut = shortcut,
+            if (activeSessions.isEmpty() || focusedIndex == -1) {
+                AnimatedContent(
+                    targetState = activeTab,
+                    transitionSpec = {
+                        fadeIn() togetherWith fadeOut()
+                    },
+                    label = "TabContentTransition"
+                ) { tab ->
+                    if (tab == 0) {
+                        DashboardScreen(
                             viewModel = viewModel,
-                            onClose = { viewModel.selectShortcut(null) }
+                            modifier = Modifier.padding(innerPadding)
                         )
                     } else {
-                        WebViewerScreen(
-                            shortcut = shortcut,
-                            viewModel = viewModel,
+                        TransferScreen(
                             transferViewModel = transferViewModel,
-                            onClose = { viewModel.selectShortcut(null) }
+                            modifier = Modifier.padding(innerPadding)
                         )
                     }
                 }
+            }
+            
+            if (activeSessions.isNotEmpty()) {
+                // Multi-tasking rendering: keep sessions in memory if possible
+                if (focusedIndex != -1) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        activeSessions.forEachIndexed { index, session ->
+                            val isFocused = index == focusedIndex
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        alpha = if (isFocused) 1f else 0f
+                                        translationX = if (isFocused) 0f else 20000f // Move out of view
+                                    }
+                            ) {
+                                if (isFocused) {
+                                    if (session.isVnc) {
+                                        VncViewerScreen(
+                                            shortcut = session,
+                                            viewModel = viewModel,
+                                            onClose = { viewModel.closeSession(index) }
+                                        )
+                                    } else {
+                                        WebViewerScreen(
+                                            shortcut = session,
+                                            viewModel = viewModel,
+                                            transferViewModel = transferViewModel,
+                                            onClose = { viewModel.closeSession(index) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Global Multitasking Trigger
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = 80.dp),
+                    contentAlignment = Alignment.BottomEnd
+                ) {
+                    MultitaskingFab(onClick = { showTaskSwitcher = true })
+                }
+            }
+
+            if (showTaskSwitcher) {
+                TaskSwitcherOverlay(
+                    activeSessions = activeSessions,
+                    focusedIndex = focusedIndex,
+                    onSwitch = { viewModel.switchSession(it) },
+                    onClose = { viewModel.closeSession(it) },
+                    onCloseAll = { viewModel.closeAllSessions() },
+                    onBackToHome = { viewModel.switchSession(-1) },
+                    onDismiss = { showTaskSwitcher = false }
+                )
             }
         }
     }
@@ -540,9 +588,9 @@ fun DashboardScreen(
                         }
                     } else {
                         LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            columns = GridCells.Adaptive(minSize = 80.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
                             items(filteredShortcuts) { shortcut ->
@@ -610,8 +658,8 @@ fun DashboardScreen(
         if (showAddDialog) {
             AddEditShortcutDialog(
                 onDismiss = { showAddDialog = false },
-                onSave = { name, url, icon, isVnc, vncQ, vncC, vncS, fs ->
-                    viewModel.addShortcut(name, url, icon, isVnc, vncQ, vncC, vncS, fs)
+                onSave = { name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs ->
+                    viewModel.addShortcut(name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs)
                     showAddDialog = false
                 }
             )
@@ -622,9 +670,9 @@ fun DashboardScreen(
             AddEditShortcutDialog(
                 shortcut = editingShortcut,
                 onDismiss = { editingShortcut = null },
-                onSave = { name, url, icon, isVnc, vncQ, vncC, vncS, fs ->
+                onSave = { name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs ->
                     editingShortcut?.let {
-                        viewModel.updateShortcut(it.id, name, url, icon, isVnc, vncQ, vncC, vncS, fs)
+                        viewModel.updateShortcut(it.id, name, url, icon, favIcon, isVnc, vncQ, vncC, vncS, fs)
                     }
                     editingShortcut = null
                 }
@@ -636,6 +684,7 @@ fun DashboardScreen(
 // ---------------- SHORTCUT CARD & LISTS ----------------
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 fun ShortcutCard(
     shortcut: ShortcutEntity,
     onConnect: () -> Unit,
@@ -645,163 +694,90 @@ fun ShortcutCard(
     var showMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(150.dp)
-            .clickable { onConnect() }
+            .combinedClickable(
+                onClick = { onConnect() },
+                onLongClick = { showMenu = true }
+            )
+            .padding(vertical = 12.dp, horizontal = 4.dp)
             .testTag("shortcut_card_${shortcut.id}"),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E22)),
-        border = BorderStroke(1.dp, Color(0xFF2C2C35)),
-        shape = RoundedCornerShape(16.dp)
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(12.dp)
+        Box(
+            modifier = Modifier
+                .size(60.dp)
+                .background(
+                    color = if (shortcut.isVnc) Color(0x1A00BCD4) else Color(0x1AFF9800),
+                    shape = RoundedCornerShape(14.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            ShortcutIcon(
+                iconName = shortcut.iconName,
+                favIconUrl = shortcut.favIconUrl,
+                tint = if (shortcut.isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800),
+                modifier = Modifier.size(32.dp)
+            )
+            
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false },
+                modifier = Modifier.background(Color(0xFF232329))
             ) {
-                // Icon and Menu
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(
-                                color = if (shortcut.isVnc) Color(0x1A00BCD4) else Color(0x1AFF9800),
-                                shape = RoundedCornerShape(10.dp)
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = getIconByName(shortcut.iconName),
-                            contentDescription = shortcut.name,
-                            tint = if (shortcut.isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
-                    Box {
-                        IconButton(onClick = { showMenu = true }, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                DropdownMenuItem(
+                    text = { Text("Bagikan Link", color = Color.White) },
+                    onClick = {
+                        showMenu = false
+                        try {
+                            val domain = "ais-pre-qrblnyd3cw4asxasjh7lml-915540977151.asia-southeast1.run.app"
+                            val encodedUrl = java.net.URLEncoder.encode(shortcut.url, "UTF-8")
+                            val encodedName = java.net.URLEncoder.encode(shortcut.name, "UTF-8")
+                            val shareUrl = "https://$domain/open?url=$encodedUrl&name=$encodedName&vnc=${shortcut.isVnc}"
+                            
+                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            val clip = android.content.ClipData.newPlainText("Portal App Link", shareUrl)
+                            clipboard.setPrimaryClip(clip)
+                            android.widget.Toast.makeText(context, "Link portal disalin!", android.widget.Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "Gagal menyalin link", android.widget.Toast.LENGTH_SHORT).show()
                         }
-                        DropdownMenu(
-                            expanded = showMenu,
-                            onDismissRequest = { showMenu = false },
-                            modifier = Modifier.background(Color(0xFF232329))
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Bagikan Link", color = Color.White) },
-                                onClick = {
-                                    showMenu = false
-                                    try {
-                                        val domain = "ais-pre-qrblnyd3cw4asxasjh7lml-915540977151.asia-southeast1.run.app"
-                                        val encodedUrl = java.net.URLEncoder.encode(shortcut.url, "UTF-8")
-                                        val encodedName = java.net.URLEncoder.encode(shortcut.name, "UTF-8")
-                                        val shareUrl = "https://$domain/open?url=$encodedUrl&name=$encodedName&vnc=${shortcut.isVnc}"
-                                        
-                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                        val clip = android.content.ClipData.newPlainText("Portal App Link", shareUrl)
-                                        clipboard.setPrimaryClip(clip)
-                                        android.widget.Toast.makeText(context, "Link portal disalin!", android.widget.Toast.LENGTH_SHORT).show()
-                                    } catch (e: Exception) {
-                                        android.widget.Toast.makeText(context, "Gagal menyalin link", android.widget.Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = Color(0xFFFF9800), modifier = Modifier.size(16.dp)) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Edit", color = Color.White) },
-                                onClick = {
-                                    showMenu = false
-                                    onEdit()
-                                },
-                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(16.dp)) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Hapus", color = Color.Red) },
-                                onClick = {
-                                    showMenu = false
-                                    onDelete()
-                                },
-                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.Red, modifier = Modifier.size(16.dp)) }
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                // Name
-                Text(
-                    text = shortcut.name,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    },
+                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = Color(0xFFFF9800), modifier = Modifier.size(16.dp)) }
                 )
-
-                // URL
-                Text(
-                    text = shortcut.url,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        color = Color.Gray,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
+                DropdownMenuItem(
+                    text = { Text("Edit", color = Color.White) },
+                    onClick = {
+                        showMenu = false
+                        onEdit()
+                    },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(16.dp)) }
                 )
-
-                // Tags Row
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val tagBg = if (shortcut.isVnc) Color(0x1A00BCD4) else Color(0x1AFF9800)
-                    val tagColor = if (shortcut.isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800)
-                    val label = if (shortcut.isVnc) "VNC" else "WEB"
-
-                    Box(
-                        modifier = Modifier
-                            .background(tagBg, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(label, color = tagColor, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    if (shortcut.isFullscreen) {
-                        Box(
-                            modifier = Modifier
-                                .background(Color(0x1A4CAF50), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text("FULL", color = Color(0xFF4CAF50), fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    if (shortcut.isVnc) {
-                        Box(
-                            modifier = Modifier
-                                .background(Color(0x1A9C27B0), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(shortcut.vncQuality.uppercase(), color = Color(0xFFE040FB), fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
+                DropdownMenuItem(
+                    text = { Text("Hapus", color = Color.Red) },
+                    onClick = {
+                        showMenu = false
+                        onDelete()
+                    },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.Red, modifier = Modifier.size(16.dp)) }
+                )
             }
         }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = shortcut.name,
+            style = MaterialTheme.typography.labelMedium.copy(
+                color = Color.White,
+                fontWeight = FontWeight.Normal,
+                fontSize = 11.sp
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -881,18 +857,38 @@ fun HistoryItemRow(
 fun AddEditShortcutDialog(
     shortcut: ShortcutEntity? = null,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, Boolean, String, String, String, Boolean) -> Unit
+    onSave: (String, String, String, String?, Boolean, String, String, String, Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(shortcut?.name ?: "") }
     var url by remember { mutableStateOf(shortcut?.url ?: "") }
     var selectedIcon by remember { mutableStateOf(shortcut?.iconName ?: "Globe") }
+    var favIconUrl by remember { mutableStateOf(shortcut?.favIconUrl) }
     var isVnc by remember { mutableStateOf(shortcut?.isVnc ?: false) }
     var vncQuality by remember { mutableStateOf(shortcut?.vncQuality ?: "Medium") }
     var vncColorDepth by remember { mutableStateOf(shortcut?.vncColorDepth ?: "24-bit") }
     var vncScale by remember { mutableStateOf(shortcut?.vncScale ?: "Fit to screen") }
     var isFullscreen by remember { mutableStateOf(shortcut?.isFullscreen ?: false) }
 
-    val iconsList = listOf("Globe", "Desktop", "Router", "Cloud", "Terminal", "Tv", "Camera", "Settings")
+    // Automatic favicon detection
+    LaunchedEffect(url, isVnc) {
+        if (!isVnc && url.isNotBlank()) {
+            val domain = try {
+                val cleanedUrl = if (!url.startsWith("http")) "https://$url" else url
+                java.net.URL(cleanedUrl).host?.removePrefix("www.")
+            } catch (e: Exception) {
+                null
+            }
+            if (domain != null && domain.contains(".")) {
+                favIconUrl = "https://www.google.com/s2/favicons?sz=128&domain=$domain"
+            } else {
+                favIconUrl = null
+            }
+        } else {
+            favIconUrl = null
+        }
+    }
+
+    val iconsList = listOf("Link", "Globe", "Desktop", "Terminal", "Cloud", "Star", "Download", "Movie", "Music", "Security", "Camera", "Settings")
 
     Dialog(onDismissRequest = { onDismiss() }) {
         Card(
@@ -1152,7 +1148,24 @@ fun AddEditShortcutDialog(
                 Divider(color = Color(0xFF33333C), modifier = Modifier.padding(vertical = 12.dp))
 
                 // Icon Picker
-                Text("Pilih Icon Tampilan:", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Pilih Icon Tampilan:", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    
+                    if (favIconUrl != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Favicon Terdeteksi", color = Color(0xFFFF9800), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            ShortcutIcon(iconName = "", favIconUrl = favIconUrl, tint = Color.Unspecified, modifier = Modifier.size(24.dp))
+                        }
+                    }
+                }
+                
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1161,7 +1174,7 @@ fun AddEditShortcutDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     iconsList.forEach { iconName ->
-                        val isSelected = selectedIcon == iconName
+                        val isSelected = selectedIcon == iconName && favIconUrl == null
                         val tint = if (isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800)
                         val bg = if (isSelected) {
                             if (isVnc) Color(0x3300BCD4) else Color(0x33FF9800)
@@ -1172,15 +1185,23 @@ fun AddEditShortcutDialog(
                                 .size(48.dp)
                                 .background(bg, RoundedCornerShape(8.dp))
                                 .border(1.dp, if (isSelected) tint else Color.Transparent, RoundedCornerShape(8.dp))
-                                .clickable { selectedIcon = iconName },
+                                .clickable { 
+                                    selectedIcon = iconName
+                                    if (iconName != "Link") {
+                                        // If user manually picks an icon, we might want to keep favicon or not
+                                        // For now, let's say favicon always takes precedence if detected, 
+                                        // but user can override by picking a manual icon?
+                                        // Actually, let's clear favicon if they pick a manual icon?
+                                        // No, user said "automatic", so let's keep it simple.
+                                    }
+                                },
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = getIconByName(iconName),
-                                contentDescription = null,
-                                tint = if (isSelected) tint else Color.Gray,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        ShortcutIcon(
+                            iconName = iconName,
+                            tint = if (isSelected) tint else Color.Gray,
+                            modifier = Modifier.size(20.dp)
+                        )
                         }
                     }
                 }
@@ -1197,7 +1218,7 @@ fun AddEditShortcutDialog(
                     Button(
                         onClick = {
                             if (name.isNotBlank() && url.isNotBlank()) {
-                                onSave(name, url, selectedIcon, isVnc, vncQuality, vncColorDepth, vncScale, isFullscreen)
+                                onSave(name, url, selectedIcon, favIconUrl, isVnc, vncQuality, vncColorDepth, vncScale, isFullscreen)
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -1215,19 +1236,198 @@ fun AddEditShortcutDialog(
     }
 }
 
-// ---------------- ICON HELPER ----------------
+// ---------------- MULTITASKING UI ----------------
+
+@Composable
+fun TaskSwitcherOverlay(
+    activeSessions: List<ShortcutEntity>,
+    focusedIndex: Int,
+    onSwitch: (Int) -> Unit,
+    onClose: (Int) -> Unit,
+    onCloseAll: () -> Unit,
+    onBackToHome: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 500.dp)
+                .padding(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E22)),
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.dp, Color(0xFF2C2C35))
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Tugas Aktif",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Tutup", tint = Color.Gray)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (activeSessions.isEmpty()) {
+                    Text("Tidak ada tugas aktif", color = Color.Gray, modifier = Modifier.padding(vertical = 32.dp).align(Alignment.CenterHorizontally))
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        itemsIndexed(activeSessions) { index, session ->
+                            val isFocused = index == focusedIndex
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        color = if (isFocused) Color(0x1A00BCD4) else Color(0xFF151518),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (isFocused) Color(0xFF00BCD4) else Color.Transparent,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable { 
+                                        onSwitch(index)
+                                        onDismiss()
+                                    }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                ShortcutIcon(
+                                    iconName = session.iconName,
+                                    favIconUrl = session.favIconUrl,
+                                    tint = if (session.isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800),
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        session.name,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        session.url,
+                                        color = Color.Gray,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                IconButton(onClick = { onClose(index) }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Tutup Tugas", tint = Color.Red, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            onBackToHome()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        border = BorderStroke(1.dp, Color(0xFF2C2C35)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Home, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Beranda", fontSize = 12.sp)
+                    }
+                    
+                    Button(
+                        onClick = onCloseAll,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Tutup Semua", fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MultitaskingFab(onClick: () -> Unit) {
+    FloatingActionButton(
+        onClick = onClick,
+        containerColor = Color(0xFF2C2C35),
+        contentColor = Color(0xFFFF9800),
+        shape = CircleShape,
+        modifier = Modifier
+            .padding(16.dp)
+            .size(48.dp)
+    ) {
+        Icon(Icons.Default.Layers, contentDescription = "Multitasking")
+    }
+}
+
+@Composable
+fun ShortcutIcon(iconName: String, tint: Color, modifier: Modifier = Modifier, favIconUrl: String? = null) {
+    if (favIconUrl != null) {
+        AsyncImage(
+            model = favIconUrl,
+            contentDescription = null,
+            modifier = modifier.clip(RoundedCornerShape(4.dp))
+        )
+    } else if (iconName == "Link") {
+        Image(
+            painter = painterResource(id = R.drawable.ic_shortcut_link),
+            contentDescription = null,
+            modifier = modifier.clip(RoundedCornerShape(4.dp))
+        )
+    } else {
+        Icon(
+            imageVector = getIconByName(iconName),
+            contentDescription = null,
+            tint = tint,
+            modifier = modifier
+        )
+    }
+}
 
 fun getIconByName(name: String): ImageVector {
     return when (name) {
+        "Link" -> Icons.Default.Link
         "Globe" -> Icons.Default.Home
-        "Desktop" -> Icons.Default.Settings
-        "Router" -> Icons.Default.Build
-        "Cloud" -> Icons.Default.Star
-        "Terminal" -> Icons.Default.Edit
-        "Tv" -> Icons.Default.Settings
-        "Camera" -> Icons.Default.Warning
+        "Desktop" -> Icons.Default.Monitor
+        "Terminal" -> Icons.Default.Terminal
+        "Cloud" -> Icons.Default.Cloud
+        "Star" -> Icons.Default.Star
+        "Download" -> Icons.Default.GetApp
+        "Movie" -> Icons.Default.Movie
+        "Music" -> Icons.Default.MusicNote
+        "Security" -> Icons.Default.Security
+        "Camera" -> Icons.Default.PhotoCamera
         "Settings" -> Icons.Default.Settings
-        else -> Icons.Default.Star
+        else -> Icons.Default.Home
     }
 }
 
@@ -1249,10 +1449,12 @@ fun WebViewerScreen(
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
     var showController by remember { mutableStateOf(true) }
-
-    var detectedVideoUrl by remember { mutableStateOf<String?>(null) }
-    var detectedVideoTitle by remember { mutableStateOf<String?>(null) }
+    var detectedVideos by remember { mutableStateOf(listOf<Pair<String, String>>()) } // List of (Url, Title)
     var showDetectionNotification by remember { mutableStateOf(false) }
+
+    // Draggable Bubble State
+    var bubbleOffset by remember { mutableStateOf(IntOffset(0, 0)) }
+    var isBubbleVisible by remember { mutableStateOf(true) }
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -1262,6 +1464,10 @@ fun WebViewerScreen(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
+                // Enable Cookies Persistence
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(WebView(ctx), true)
+
                 WebView(ctx).apply {
                     webViewRef = this
                     setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
@@ -1270,15 +1476,27 @@ fun WebViewerScreen(
                         android.widget.Toast.makeText(ctx, "Mengunduh file: $filename", android.widget.Toast.LENGTH_SHORT).show()
                     }
                     
-                    // Add JS Interface for video playback detection (> 30s)
+                    // Add JS Interface for video playback detection
                     addJavascriptInterface(
                         object {
                             @android.webkit.JavascriptInterface
                             fun onVideoDetected(src: String, title: String) {
                                 scope.launch {
-                                    detectedVideoUrl = src
-                                    detectedVideoTitle = title
-                                    showDetectionNotification = true
+                                    if (!detectedVideos.any { it.first == src }) {
+                                        detectedVideos = detectedVideos + (src to title)
+                                        showDetectionNotification = true
+                                    }
+                                }
+                            }
+
+                            @android.webkit.JavascriptInterface
+                            fun onScanFinished(count: Int) {
+                                scope.launch {
+                                    if (count == 0) {
+                                        android.widget.Toast.makeText(ctx, "Tidak ada video ditemukan", android.widget.Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        android.widget.Toast.makeText(ctx, "Berhasil menemukan $count video!", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                         },
@@ -1297,6 +1515,7 @@ fun WebViewerScreen(
                         builtInZoomControls = true
                         displayZoomControls = false
                         setSupportZoom(true)
+                        cacheMode = WebSettings.LOAD_DEFAULT
                         
                         // Apply mobile/desktop UA initially inside the settings apply
                         userAgentString = if (isMobileView) {
@@ -1314,7 +1533,10 @@ fun WebViewerScreen(
 
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, url: String?) {
-                            url?.let { currentUrl = it }
+                            url?.let { 
+                                currentUrl = it
+                                viewModel.saveWebHistory(it, view?.title ?: "")
+                            }
                             canGoBack = view?.canGoBack() ?: false
                             canGoForward = view?.canGoForward() ?: false
                             
@@ -1350,7 +1572,7 @@ fun WebViewerScreen(
                                                 state.accumulatedPlayTime += delta;
                                                 state.lastUpdate = now;
                                                 
-                                                if (state.accumulatedPlayTime >= 20000 && !state.triggered) {
+                                                if (state.accumulatedPlayTime >= 5000 && !state.triggered) {
                                                     if (window.VideoDetector) {
                                                         state.triggered = true;
                                                         window.VideoDetector.onVideoDetected(src, document.title || "Video");
@@ -1361,6 +1583,66 @@ fun WebViewerScreen(
                                             }
                                         }
                                     }, 1000);
+
+                                    // Manual scan function
+                                    window.manualVideoScan = function() {
+                                        var count = 0;
+                                        var foundUrls = new Set();
+
+                                        function checkAndNotify(src, title) {
+                                            if (!src || typeof src !== 'string') return;
+                                            if (src.startsWith('//')) src = 'https:' + src;
+                                            if (src.startsWith('/') && !src.startsWith('//')) src = window.location.origin + src;
+                                            
+                                            if (src && !foundUrls.has(src)) {
+                                                foundUrls.add(src);
+                                                count++;
+                                                if (window.VideoDetector) {
+                                                    window.VideoDetector.onVideoDetected(src, title);
+                                                }
+                                            }
+                                        }
+
+                                        // 1. Search video tags
+                                        var videos = document.getElementsByTagName('video');
+                                        for (var i = 0; i < videos.length; i++) {
+                                            var src = videos[i].currentSrc || videos[i].src;
+                                            checkAndNotify(src, document.title || "Video Scan");
+                                        }
+
+                                        // 2. Search source tags
+                                        var sources = document.getElementsByTagName('source');
+                                        for (var j = 0; j < sources.length; j++) {
+                                            checkAndNotify(sources[j].src, document.title || "Video Source Scan");
+                                        }
+
+                                        // 2b. Search iframe sources
+                                        var iframes = document.getElementsByTagName('iframe');
+                                        for (var k = 0; k < iframes.length; k++) {
+                                            var isrc = iframes[k].src;
+                                            if (isrc && (isrc.includes('.mp4') || isrc.includes('.m3u8') || isrc.includes('player'))) {
+                                                checkAndNotify(isrc, "Iframe: " + (document.title || "Video"));
+                                            }
+                                        }
+
+                                        // 3. Search for common video extensions in all tags with src/href/data
+                                        var all = document.querySelectorAll('[src], [href], [data-src], [data-video], [data-url], [data-file]');
+                                        var videoExts = ['.mp4', '.m3u8', '.webm', '.mov', '.avi', '.mpd', 'manifest', 'googlevideo.com', 'playlist'];
+                                        all.forEach(el => {
+                                            var url = el.src || el.href || el.getAttribute('data-src') || el.getAttribute('data-video') || el.getAttribute('data-url') || el.getAttribute('data-file');
+                                            if (typeof url === 'string') {
+                                                var lower = url.toLowerCase();
+                                                if (videoExts.some(ext => lower.includes(ext))) {
+                                                    checkAndNotify(url, document.title || "Potential Video");
+                                                }
+                                            }
+                                        });
+
+                                        if (window.VideoDetector) {
+                                            window.VideoDetector.onScanFinished(count);
+                                        }
+                                        return count;
+                                    };
                                 })();
                             """.trimIndent(), null)
                         }
@@ -1372,6 +1654,21 @@ fun WebViewerScreen(
                         ): WebResourceResponse? {
                             if (request == null) return null
                             val urlStr = request.url.toString()
+                            val lowerUrl = urlStr.lowercase()
+
+                            // NETWORK-LEVEL VIDEO DETECTION
+                            val videoExtensions = listOf(".mp4", ".m3u8", ".webm", ".mov", ".avi", ".ts", ".mpd", "manifest", "playlist.m3u8", "chunklist", "get_video", "googlevideo", "stream")
+                            if (videoExtensions.any { lowerUrl.contains(it) } && 
+                                !lowerUrl.contains(".js") && !lowerUrl.contains(".css") && !lowerUrl.contains(".png") && !lowerUrl.contains(".jpg") && !lowerUrl.contains(".woff")) {
+                                android.util.Log.d("VideoDetection", "Detected URL: $urlStr")
+                                scope.launch {
+                                    if (!detectedVideos.any { it.first == urlStr }) {
+                                        val title = view?.title ?: "Video Terdeteksi"
+                                        detectedVideos = (detectedVideos + (urlStr to title)).distinctBy { it.first }
+                                        showDetectionNotification = true
+                                    }
+                                }
+                            }
                             
                             // To prevent blocking local or secure traffic unnecessarily, we only intercept HTML/Document requests
                             val isHtmlRequest = request.method.equals("GET", ignoreCase = true) && 
@@ -1421,7 +1718,7 @@ fun WebViewerScreen(
                                                             var delta = now - state.lastUpdate;
                                                             state.accumulatedPlayTime += delta;
                                                             state.lastUpdate = now;
-                                                            if (state.accumulatedPlayTime >= 20000 && !state.triggered) {
+                                                            if (state.accumulatedPlayTime >= 5000 && !state.triggered) {
                                                                 if (window.VideoDetector) {
                                                                     state.triggered = true;
                                                                     window.VideoDetector.onVideoDetected(src, document.title || "Video");
@@ -1510,7 +1807,7 @@ fun WebViewerScreen(
 
         // Sliding Notification Overlay for Detected Video
         AnimatedVisibility(
-            visible = showDetectionNotification && detectedVideoUrl != null,
+            visible = showDetectionNotification && detectedVideos.isNotEmpty(),
             enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
             exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
             modifier = Modifier
@@ -1534,7 +1831,7 @@ fun WebViewerScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.KeyboardArrowDown,
+                                imageVector = Icons.Default.GetApp,
                                 contentDescription = null,
                                 tint = Color(0xFFFF9800)
                             )
@@ -1542,13 +1839,14 @@ fun WebViewerScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Video Terdeteksi!",
+                                text = "Video Terdeteksi! (${detectedVideos.size})",
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
                                 fontSize = 15.sp
                             )
+                            val lastVideo = detectedVideos.lastOrNull()
                             Text(
-                                text = detectedVideoTitle ?: "Video diputar > 20 detik",
+                                text = lastVideo?.second ?: "Siap diunduh",
                                 color = Color.LightGray,
                                 fontSize = 12.sp,
                                 maxLines = 1,
@@ -1563,29 +1861,70 @@ fun WebViewerScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         TextButton(
-                            onClick = { showDetectionNotification = false }
+                            onClick = { 
+                                showDetectionNotification = false
+                                detectedVideos = emptyList() // Clear once tutup
+                            }
                         ) {
                             Text("Tutup", color = Color.Gray)
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = {
-                                val url = detectedVideoUrl
-                                if (url != null) {
+                                detectedVideos.forEach { (url, title) ->
                                     val guessName = android.webkit.URLUtil.guessFileName(url, null, null) ?: "video_download.mp4"
                                     val finalName = if (guessName.endsWith(".bin") || !guessName.contains(".")) "video_download.mp4" else guessName
                                     transferViewModel.addDownload(url, finalName)
-                                    android.widget.Toast.makeText(context, "Mulai mengunduh video...", android.widget.Toast.LENGTH_SHORT).show()
                                 }
+                                android.widget.Toast.makeText(context, "Mulai mengunduh ${detectedVideos.size} video...", android.widget.Toast.LENGTH_SHORT).show()
+                                detectedVideos = emptyList()
                                 showDetectionNotification = false
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Unduh Video", color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text("Unduh Semua", color = Color.Black, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
+            }
+        }
+
+        // --- Draggable Bubble Icon ---
+        if (isBubbleVisible) {
+            Box(
+                modifier = Modifier
+                    .offset { bubbleOffset }
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            bubbleOffset = IntOffset(
+                                (bubbleOffset.x + dragAmount.x).roundToInt(),
+                                (bubbleOffset.y + dragAmount.y).roundToInt()
+                            )
+                        }
+                    }
+                    .size(56.dp)
+                    .padding(8.dp)
+                    .background(
+                        brush = Brush.linearGradient(
+                            colors = listOf(Color(0xFFFF9800), Color(0xFFFF5722))
+                        ),
+                        shape = CircleShape
+                    )
+                    .clickable {
+                        // Manual Scan on click bubble
+                        webViewRef?.evaluateJavascript("if(window.manualVideoScan) window.manualVideoScan();", null)
+                    }
+                    .align(Alignment.CenterEnd),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Scan Video",
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp)
+                )
             }
         }
  
@@ -1638,7 +1977,7 @@ fun WebViewerScreen(
                                 enabled = canGoBack,
                                 modifier = Modifier.size(36.dp)
                             ) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = "Kembali", tint = if (canGoBack) Color.White else Color.DarkGray)
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali", tint = if (canGoBack) Color.White else Color.DarkGray)
                             }
  
                             // Forward Button
@@ -1647,7 +1986,7 @@ fun WebViewerScreen(
                                 enabled = canGoForward,
                                 modifier = Modifier.size(36.dp)
                             ) {
-                                Icon(Icons.Default.ArrowForward, contentDescription = "Maju", tint = if (canGoForward) Color.White else Color.DarkGray)
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Maju", tint = if (canGoForward) Color.White else Color.DarkGray)
                             }
  
                             // Refresh Button
@@ -1656,6 +1995,18 @@ fun WebViewerScreen(
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Muat Ulang", tint = Color.White)
+                            }
+
+                            // Toggle Bubble Visibility
+                            IconButton(
+                                onClick = { isBubbleVisible = !isBubbleVisible },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isBubbleVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Bubble",
+                                    tint = if (isBubbleVisible) Color(0xFFFF9800) else Color.Gray
+                                )
                             }
  
                             // Desktop/Mobile toggle

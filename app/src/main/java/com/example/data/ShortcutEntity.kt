@@ -9,6 +9,7 @@ data class ShortcutEntity(
     val name: String,
     val url: String, // Can be IP:port or a web URL
     val iconName: String, // e.g., "Globe", "Desktop", "Router", "Cloud", "Terminal", "Tv", "Cast", "Camera", "Settings"
+    val favIconUrl: String? = null,
     val isVnc: Boolean,
     val vncQuality: String = "Medium", // Low, Medium, High
     val vncColorDepth: String = "24-bit", // 8-bit, 16-bit, 24-bit
