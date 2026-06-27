@@ -1,5 +1,7 @@
 package com.example
 
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.ui.graphics.Path
 import android.app.Application
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -181,8 +183,13 @@ fun MainContent() {
         }
     }
 
+    var showAddDialogGlobal by remember { mutableStateOf(false) }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        topBar = {
+            PortalHeader(onAddClick = { showAddDialogGlobal = true })
+        },
         bottomBar = {
             if (activeSessions.isEmpty()) {
                 NavigationBar(
@@ -226,6 +233,16 @@ fun MainContent() {
                 .fillMaxSize()
                 .background(Color(0xFF121214)) // Deep sleek charcoal background
         ) {
+            if (showAddDialogGlobal) {
+                AddEditShortcutDialog(
+                    shortcut = null,
+                    onDismiss = { showAddDialogGlobal = false },
+                    onSave = { n, u, icon, fav, vnc, q, d, s, fs, chrome ->
+                        viewModel.addShortcut(n, u, icon, fav, vnc, q, d, s, fs, chrome)
+                        showAddDialogGlobal = false
+                    }
+                )
+            }
             if (activeSessions.isEmpty() || focusedIndex == -1) {
                 AnimatedContent(
                     targetState = activeTab,
@@ -250,67 +267,254 @@ fun MainContent() {
             
             if (activeSessions.isNotEmpty()) {
                 // Multi-tasking rendering: keep sessions in memory if possible
-                if (focusedIndex != -1) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        activeSessions.forEachIndexed { index, session ->
-                            val isFocused = index == focusedIndex
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer {
-                                        alpha = if (isFocused) 1f else 0f
-                                        translationX = if (isFocused) 0f else 20000f // Move out of view
-                                    }
-                            ) {
-                                if (isFocused) {
-                                    if (session.isVnc) {
-                                        VncViewerScreen(
-                                            shortcut = session,
-                                            viewModel = viewModel,
-                                            onClose = { viewModel.closeSession(index) }
-                                        )
-                                    } else {
-                                        WebViewerScreen(
-                                            shortcut = session,
-                                            viewModel = viewModel,
-                                            transferViewModel = transferViewModel,
-                                            onClose = { viewModel.closeSession(index) }
-                                        )
-                                    }
+                Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                    activeSessions.forEachIndexed { index, session ->
+                        val isFocused = index == focusedIndex
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    alpha = if (isFocused) 1f else 0f
+                                    translationX = if (isFocused) 0f else 20000f // Move out of view
                                 }
+                        ) {
+                            if (session.isVnc) {
+                                VncViewerScreen(
+                                    shortcut = session,
+                                    viewModel = viewModel,
+                                    onClose = { viewModel.closeSession(index) }
+                                )
+                            } else {
+                                WebViewerScreen(
+                                    shortcut = session,
+                                    viewModel = viewModel,
+                                    transferViewModel = transferViewModel,
+                                    onClose = { viewModel.closeSession(index) }
+                                )
                             }
                         }
                     }
                 }
 
                 // Global Multitasking Trigger
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 80.dp),
-                    contentAlignment = Alignment.BottomEnd
-                ) {
-                    MultitaskingFab(onClick = { showTaskSwitcher = true })
+                if (focusedIndex != -1) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 80.dp),
+                        contentAlignment = Alignment.BottomEnd
+                    ) {
+                        MultitaskingFab(onClick = { showTaskSwitcher = true })
+                    }
+                } else {
+                    // Show Dock at Dashboard (White Box area)
+                    MinimizedDock(
+                        activeSessions = activeSessions,
+                        focusedIndex = focusedIndex,
+                        onSwitch = { viewModel.switchSession(it) },
+                        onToggleSwitcher = { showTaskSwitcher = !showTaskSwitcher }
+                    )
                 }
             }
 
             if (showTaskSwitcher) {
-                TaskSwitcherOverlay(
-                    activeSessions = activeSessions,
-                    focusedIndex = focusedIndex,
-                    transferViewModel = transferViewModel,
-                    onSwitch = { viewModel.switchSession(it) },
-                    onClose = { viewModel.closeSession(it) },
-                    onCloseAll = { viewModel.closeAllSessions() },
-                    onBackToHome = { viewModel.switchSession(-1) },
-                    onDismiss = { showTaskSwitcher = false }
-                )
+                // If focusedIndex is -1 (at dashboard), show it above the dock
+                // If not, it can still show as a centered overlay but without Dialog dimming
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.6f))
+                        .clickable { showTaskSwitcher = false },
+                    contentAlignment = if (focusedIndex == -1) Alignment.BottomCenter else Alignment.Center
+                ) {
+                    TaskSwitcherOverlay(
+                        activeSessions = activeSessions,
+                        focusedIndex = focusedIndex,
+                        transferViewModel = transferViewModel,
+                        onSwitch = { viewModel.switchSession(it) },
+                        onClose = { viewModel.closeSession(it) },
+                        onCloseAll = { viewModel.closeAllSessions() },
+                        onBackToHome = { viewModel.switchSession(-1) },
+                        onDismiss = { showTaskSwitcher = false },
+                        modifier = Modifier.padding(bottom = if (focusedIndex == -1) 80.dp else 0.dp)
+                    )
+                }
             }
         }
     }
 }
 
 // ---------------- DASHBOARD ----------------
+
+@Composable
+fun MinimizedDock(
+    activeSessions: List<ShortcutEntity>,
+    focusedIndex: Int,
+    onSwitch: (Int) -> Unit,
+    onToggleSwitcher: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 20.dp),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E22).copy(alpha = 0.95f)),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.5f)),
+            modifier = Modifier
+                .wrapContentWidth()
+                .height(64.dp)
+                .padding(horizontal = 16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Dock Title/Indicator - Now Clickable for Switcher List
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color(0xFF2C2C35), CircleShape)
+                        .clickable { onToggleSwitcher() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Layers,
+                        contentDescription = "Daftar Tugas",
+                        tint = Color(0xFFFF9800),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                
+                VerticalDivider(color = Color(0xFF33333C), modifier = Modifier.height(24.dp))
+                
+                LazyRow(
+                    modifier = Modifier.wrapContentWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    itemsIndexed(activeSessions) { index, session ->
+                        val isFocused = index == focusedIndex
+                        Surface(
+                            onClick = { onSwitch(index) },
+                            color = if (isFocused) Color(0x33FF9800) else Color(0xFF2C2C35),
+                            shape = RoundedCornerShape(10.dp),
+                            border = if (isFocused) BorderStroke(1.dp, Color(0xFFFF9800)) else null,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                ShortcutIcon(
+                                    iconName = session.iconName,
+                                    favIconUrl = session.favIconUrl,
+                                    tint = if (isFocused) Color(0xFFFF9800) else Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                
+                                // Mini triangle indicator if active session has something going on
+                                // (Just a decorative green triangle for now as requested)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(2.dp),
+                                    contentAlignment = Alignment.TopEnd
+                                ) {
+                                    Canvas(modifier = Modifier.size(6.dp)) {
+                                        val path = Path().apply {
+                                            moveTo(size.width, 0f)
+                                            lineTo(size.width, size.height)
+                                            lineTo(0f, 0f)
+                                            close()
+                                        }
+                                        drawPath(path, color = Color(0xFF4CAF50))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MinimizeTabButton(onMinimize: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.clickable { onMinimize() }
+        ) {
+            // The Green Triangle pointing down as requested
+            Canvas(modifier = Modifier.size(28.dp, 14.dp)) {
+                val path = Path().apply {
+                    moveTo(0f, 0f)
+                    lineTo(size.width, 0f)
+                    lineTo(size.width / 2f, size.height)
+                    close()
+                }
+                drawPath(path, color = Color(0xFF4CAF50))
+            }
+            
+            // Subtle handle
+            Box(
+                modifier = Modifier
+                    .width(40.dp)
+                    .height(4.dp)
+                    .background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+            )
+        }
+    }
+}
+
+@Composable
+fun PortalHeader(onAddClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF0F0F12))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column {
+            Text(
+                text = "Web & VNC Portal",
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            )
+            Text(
+                text = "Akses cepat web & remote desktop",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = Color.Gray
+                )
+            )
+        }
+        IconButton(
+            onClick = onAddClick,
+            modifier = Modifier
+                .background(Color(0xFF232329), CircleShape)
+                .testTag("add_shortcut_button_top")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Tambah Shortcut",
+                tint = Color(0xFFFF9800)
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -329,6 +533,7 @@ fun DashboardScreen(
     // Direct connect inputs
     var quickUrl by remember { mutableStateOf("") }
     var quickIsVnc by remember { mutableStateOf(false) }
+    var isQuickConnectExpanded by remember { mutableStateOf(false) }
 
     val filteredShortcuts = shortcuts.filter {
         it.name.contains(searchQuery, ignoreCase = true) || it.url.contains(searchQuery, ignoreCase = true)
@@ -351,48 +556,32 @@ fun DashboardScreen(
                 )
             }
     ) {
+        if (showAddDialog) {
+            AddEditShortcutDialog(
+                shortcut = editingShortcut,
+                onDismiss = { showAddDialog = false; editingShortcut = null },
+                onSave = { n, u, icon, fav, vnc, q, d, s, fs, chrome ->
+                    if (editingShortcut != null) {
+                        viewModel.updateShortcut(
+                            id = editingShortcut!!.id,
+                            name = n, url = u, iconName = icon, favIconUrl = fav,
+                            isVnc = vnc, vncQuality = q, vncColorDepth = d,
+                            vncScale = s, isFullscreen = fs, openInChrome = chrome
+                        )
+                    } else {
+                        viewModel.addShortcut(n, u, icon, fav, vnc, q, d, s, fs, chrome)
+                    }
+                    showAddDialog = false
+                    editingShortcut = null
+                }
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
-            // Header Row
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text(
-                        text = "Web & VNC Portal",
-                        style = MaterialTheme.typography.headlineMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    )
-                    Text(
-                        text = "Akses cepat web & remote desktop",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            color = Color.Gray
-                        )
-                    )
-                }
-                IconButton(
-                    onClick = { showAddDialog = true },
-                    modifier = Modifier
-                        .background(Color(0xFF232329), CircleShape)
-                        .testTag("add_shortcut_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Tambah Shortcut",
-                        tint = Color(0xFFFF9800)
-                    )
-                }
-            }
-
             // Quick Connection Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E22)),
@@ -403,93 +592,111 @@ fun DashboardScreen(
                     .padding(bottom = 16.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Koneksi Cepat (Quick Connect)",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White
-                        ),
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = quickUrl,
-                            onValueChange = { quickUrl = it },
-                            placeholder = { Text("IP:Port atau Alamat Web") },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("quick_connect_input"),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = Color(0xFF151518),
-                                unfocusedContainerColor = Color(0xFF151518),
-                                focusedBorderColor = Color(0xFFFF9800),
-                                unfocusedBorderColor = Color(0xFF33333C)
-                            ),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                            keyboardActions = KeyboardActions(onGo = {
-                                if (quickUrl.isNotBlank()) {
-                                    viewModel.launchDirectUrl(quickUrl, quickIsVnc)
-                                }
-                            })
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                if (quickUrl.isNotBlank()) {
-                                    viewModel.launchDirectUrl(quickUrl, quickIsVnc)
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (quickIsVnc) Color(0xFF00BCD4) else Color(0xFFFF9800)
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier
-                                .height(56.dp)
-                                .testTag("quick_connect_go_button")
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Buka", tint = Color.Black)
-                        }
-                    }
-
-                    // Toggle Button Row
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 10.dp),
+                            .clickable { isQuickConnectExpanded = !isQuickConnectExpanded }
+                            .padding(bottom = if (isQuickConnectExpanded) 12.dp else 0.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Mode Koneksi:",
-                            style = MaterialTheme.typography.bodyMedium.copy(color = Color.LightGray),
-                            modifier = Modifier.padding(end = 12.dp)
-                        )
-                        FilterChip(
-                            selected = !quickIsVnc,
-                            onClick = { quickIsVnc = false },
-                            label = { Text("Web (HTTP/HTTPS)") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0x26FF9800),
-                                selectedLabelColor = Color(0xFFFF9800),
-                                containerColor = Color(0xFF151518),
-                                labelColor = Color.Gray
+                            text = "Web & VNC (Quick Connect)",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
                             )
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        FilterChip(
-                            selected = quickIsVnc,
-                            onClick = { quickIsVnc = true },
-                            label = { Text("VNC Remote") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0x2600BCD4),
-                                selectedLabelColor = Color(0xFF00BCD4),
-                                containerColor = Color(0xFF151518),
-                                labelColor = Color.Gray
-                            )
+                        Icon(
+                            imageVector = if (isQuickConnectExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Toggle Panel",
+                            tint = Color.Gray
                         )
+                    }
+
+                    AnimatedVisibility(visible = isQuickConnectExpanded) {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = quickUrl,
+                                    onValueChange = { quickUrl = it },
+                                    placeholder = { Text("IP:Port atau Alamat Web") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("quick_connect_input"),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = Color(0xFF151518),
+                                        unfocusedContainerColor = Color(0xFF151518),
+                                        focusedBorderColor = Color(0xFFFF9800),
+                                        unfocusedBorderColor = Color(0xFF33333C)
+                                    ),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                                    keyboardActions = KeyboardActions(onGo = {
+                                        if (quickUrl.isNotBlank()) {
+                                            viewModel.launchDirectUrl(quickUrl, quickIsVnc)
+                                        }
+                                    })
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (quickUrl.isNotBlank()) {
+                                            viewModel.launchDirectUrl(quickUrl, quickIsVnc)
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (quickIsVnc) Color(0xFF00BCD4) else Color(0xFFFF9800)
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .height(56.dp)
+                                        .testTag("quick_connect_go_button")
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = "Buka", tint = Color.Black)
+                                }
+                            }
+
+                            // Toggle Button Row
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Mode Koneksi:",
+                                    style = MaterialTheme.typography.bodyMedium.copy(color = Color.LightGray),
+                                    modifier = Modifier.padding(end = 12.dp)
+                                )
+                                FilterChip(
+                                    selected = !quickIsVnc,
+                                    onClick = { quickIsVnc = false },
+                                    label = { Text("Web (HTTP/HTTPS)") },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = Color(0x26FF9800),
+                                        selectedLabelColor = Color(0xFFFF9800),
+                                        containerColor = Color(0xFF151518),
+                                        labelColor = Color.Gray
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                FilterChip(
+                                    selected = quickIsVnc,
+                                    onClick = { quickIsVnc = true },
+                                    label = { Text("VNC Remote") },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = Color(0x2600BCD4),
+                                        selectedLabelColor = Color(0xFF00BCD4),
+                                        containerColor = Color(0xFF151518),
+                                        labelColor = Color.Gray
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -624,7 +831,19 @@ fun DashboardScreen(
                                     onConnect = {
                                         if (shortcut.openInChrome && !shortcut.isVnc) {
                                             try {
-                                                val customTabsIntent = CustomTabsIntent.Builder().build()
+                                                val displayMetrics = context.resources.displayMetrics
+                                                val heightPx = (displayMetrics.heightPixels * 0.7).toInt()
+                                                
+                                                val params = androidx.browser.customtabs.CustomTabColorSchemeParams.Builder()
+                                                    .setToolbarColor(android.graphics.Color.parseColor("#1E1E22"))
+                                                    .build()
+
+                                                val customTabsIntent = CustomTabsIntent.Builder()
+                                                    .setDefaultColorSchemeParams(params)
+                                                    .setInitialActivityHeightPx(heightPx, CustomTabsIntent.ACTIVITY_HEIGHT_ADJUSTABLE)
+                                                    .setShareState(CustomTabsIntent.SHARE_STATE_ON)
+                                                    .build()
+                                                    
                                                 customTabsIntent.launchUrl(context, Uri.parse(shortcut.url))
                                                 viewModel.recordShortcutHistory(shortcut)
                                             } catch (e: Exception) {
@@ -1309,157 +1528,166 @@ fun TaskSwitcherOverlay(
     onClose: (Int) -> Unit,
     onCloseAll: () -> Unit,
     onBackToHome: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableStateOf(0) } // 0 = Tasks, 1 = Downloads
 
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 600.dp)
-                .padding(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E22)),
-            shape = RoundedCornerShape(24.dp),
-            border = BorderStroke(1.dp, Color(0xFF2C2C35))
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(max = 500.dp)
+            .padding(horizontal = 16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E22)),
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, Color(0xFF2C2C35))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = Color.Transparent,
+                    contentColor = Color(0xFF00BCD4),
+                    divider = {},
+                    indicator = { tabPositions ->
+                        TabRowDefaults.Indicator(
+                            Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                            color = Color(0xFF00BCD4)
+                        )
+                    },
+                    modifier = Modifier.weight(1f)
                 ) {
-                    TabRow(
-                        selectedTabIndex = selectedTab,
-                        containerColor = Color.Transparent,
-                        contentColor = Color(0xFF00BCD4),
-                        divider = {},
-                        indicator = { tabPositions ->
-                            TabRowDefaults.Indicator(
-                                Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                                color = Color(0xFF00BCD4)
-                            )
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Tab(
-                            selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
-                            text = { Text("Tugas Aktif", fontSize = 14.sp, fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal) }
-                        )
-                        Tab(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
-                            text = { Text("Unduhan", fontSize = 14.sp, fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal) }
-                        )
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Tutup", tint = Color.Gray)
-                    }
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        text = { Text("Tugas Aktif", fontSize = 14.sp, fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal) }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        text = { Text("Unduhan", fontSize = 14.sp, fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal) }
+                    )
                 }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Tutup", tint = Color.Gray)
+                }
+            }
 
-                Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-                if (selectedTab == 0) {
-                    // TASKS TAB
-                    if (activeSessions.isEmpty()) {
-                        Text("Tidak ada tugas aktif", color = Color.Gray, modifier = Modifier.padding(vertical = 32.dp).align(Alignment.CenterHorizontally))
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.weight(1f, fill = false),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            itemsIndexed(activeSessions) { index, session ->
-                                val isFocused = index == focusedIndex
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(
-                                            color = if (isFocused) Color(0x1A00BCD4) else Color(0xFF151518),
-                                            shape = RoundedCornerShape(12.dp)
-                                        )
-                                        .border(
-                                            width = 1.dp,
-                                            color = if (isFocused) Color(0xFF00BCD4) else Color.Transparent,
-                                            shape = RoundedCornerShape(12.dp)
-                                        )
-                                        .clickable { 
-                                            onSwitch(index)
-                                            onDismiss()
-                                        }
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    ShortcutIcon(
-                                        iconName = session.iconName,
-                                        favIconUrl = session.favIconUrl,
-                                        tint = if (session.isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800),
-                                        modifier = Modifier.size(32.dp)
+            if (selectedTab == 0) {
+                // TASKS TAB
+                if (activeSessions.isEmpty()) {
+                    Text("Tidak ada tugas aktif", color = Color.Gray, modifier = Modifier.padding(vertical = 32.dp).align(Alignment.CenterHorizontally))
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        itemsIndexed(activeSessions) { index, session ->
+                            val isFocused = index == focusedIndex
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        color = if (isFocused) Color(0x1A00BCD4) else Color(0xFF151518),
+                                        shape = RoundedCornerShape(12.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            session.name,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            session.url,
-                                            color = Color.Gray,
-                                            fontSize = 10.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (isFocused) Color(0xFF00BCD4) else Color.Transparent,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable { 
+                                        onSwitch(index)
+                                        onDismiss()
                                     }
-                                    IconButton(onClick = { onClose(index) }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Tutup Tugas", tint = Color.Red, modifier = Modifier.size(18.dp))
-                                    }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Settings/Gear Icon on the left as requested/seen in screenshot
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "Pengaturan",
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                
+                                Spacer(modifier = Modifier.width(10.dp))
+
+                                ShortcutIcon(
+                                    iconName = session.iconName,
+                                    favIconUrl = session.favIconUrl,
+                                    tint = if (session.isVnc) Color(0xFF00BCD4) else Color(0xFFFF9800),
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        session.name,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        session.url,
+                                        color = Color.Gray,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                IconButton(onClick = { onClose(index) }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Tutup Tugas", tint = Color.Red, modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
                     }
-                } else {
-                    // DOWNLOADS TAB
-                    Box(modifier = Modifier.weight(1f, fill = false)) {
-                        TransferManagerTab(viewModel = transferViewModel)
-                    }
                 }
+            } else {
+                // DOWNLOADS TAB
+                Box(modifier = Modifier.weight(1f, fill = false)) {
+                    TransferManagerTab(viewModel = transferViewModel)
+                }
+            }
 
-                Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        onBackToHome()
+                        onDismiss()
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    border = BorderStroke(1.dp, Color(0xFF2C2C35)),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            onBackToHome()
-                            onDismiss()
-                        },
+                    Icon(Icons.Default.Home, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Beranda", fontSize = 12.sp)
+                }
+                
+                if (selectedTab == 0) {
+                    Button(
+                        onClick = onCloseAll,
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        border = BorderStroke(1.dp, Color(0xFF2C2C35)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.Home, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Beranda", fontSize = 12.sp)
-                    }
-                    
-                    if (selectedTab == 0) {
-                        Button(
-                            onClick = onCloseAll,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF44336)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Tutup Semua", fontSize = 12.sp)
-                        }
+                        Text("Tutup Semua", fontSize = 12.sp)
                     }
                 }
             }
@@ -1509,7 +1737,7 @@ fun ShortcutIcon(iconName: String, tint: Color, modifier: Modifier = Modifier, f
 fun getIconByName(name: String): ImageVector {
     return when (name) {
         "Link" -> Icons.Default.Link
-        "Globe" -> Icons.Default.Home
+        "Globe" -> Icons.Default.Public
         "Desktop" -> Icons.Default.Monitor
         "Terminal" -> Icons.Default.Terminal
         "Cloud" -> Icons.Default.Cloud
@@ -1557,6 +1785,9 @@ fun WebViewerScreen(
     val context = LocalContext.current
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // Minimize Button with Green Triangle
+        MinimizeTabButton(onMinimize = { viewModel.switchSession(-1) })
+        
         // WebView instance
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -2149,6 +2380,9 @@ fun WebViewerScreen(
             }
         }
  
+        // Minimize Button with Green Triangle
+        MinimizeTabButton(onMinimize = { viewModel.switchSession(-1) })
+
         // Overlay floating handle controller
         Box(
             modifier = Modifier
@@ -2391,6 +2625,9 @@ fun VncViewerScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        // Minimize Button with Green Triangle
+        MinimizeTabButton(onMinimize = { viewModel.switchSession(-1) })
+
         if (!isConnected) {
             // Handshake Loading Screen
             Column(
